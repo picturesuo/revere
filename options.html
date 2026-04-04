@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Website Updater Options</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        max-width: 720px;
+        padding: 24px;
+      }
+
+      h1 {
+        margin-top: 0;
+      }
+
+      label,
+      input {
+        display: block;
+        width: 100%;
+      }
+
+      input[type="url"] {
+        margin: 8px 0 16px;
+        padding: 10px;
+      }
+
+      .row {
+        margin-bottom: 16px;
+      }
+
+      button {
+        padding: 10px 14px;
+      }
+
+      #message {
+        margin-top: 12px;
+        color: #444;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Website Updater Options</h1>
+    <div class="row">
+      <label for="webhook-url">Webhook URL</label>
+      <input id="webhook-url" type="url" placeholder="https://example.com/webhook">
+    </div>
+    <div class="row">
+      <label>
+        <input id="notifications-enabled" type="checkbox">
+        Enable Chrome notifications
+      </label>
+    </div>
+    <button id="save">Save</button>
+    <p id="message"></p>
+    <script src="options.js"></script>
+  </body>
+</html>
