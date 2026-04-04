@@ -4,16 +4,17 @@ const SETTINGS_KEY = "settings";
 const MAX_EVENTS = 50;
 const NOTIFICATION_TARGETS_KEY = "notificationTargets";
 const NOTIFICATION_ICON_URL = chrome.runtime.getURL("icon-128.png");
+const DEFAULT_SETTINGS = {
+  webhookUrl: "",
+  ntfyServer: "https://ntfy.sh",
+  subscriptionName: "",
+  notificationsEnabled: true
+};
 
 chrome.runtime.onInstalled.addListener(async () => {
   const { [SETTINGS_KEY]: settings } = await chrome.storage.local.get(SETTINGS_KEY);
   if (!settings) {
-    await chrome.storage.local.set({
-      [SETTINGS_KEY]: {
-        webhookUrl: "",
-        notificationsEnabled: true
-      }
-    });
+    await chrome.storage.local.set({ [SETTINGS_KEY]: DEFAULT_SETTINGS });
   }
 });
 
@@ -22,7 +23,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .then((result) => sendResponse({ ok: true, ...result }))
     .catch((error) => {
       const errorMessage = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-      console.error("Website Updater error:", errorMessage, error);
+      console.error("Revere error:", errorMessage, error);
       sendResponse({ ok: false, error: errorMessage });
     });
 
@@ -48,7 +49,7 @@ async function handleMessage(message, sender) {
 }
 
 async function getPopupState(tabId) {
-  const { [WATCHED_TABS_KEY]: watchedTabs = {} } = await chrome.storage.local.get(WATCHED_TABS_KEY);
+  const watchedTabs = await getStoredObject(WATCHED_TABS_KEY);
   return {
     watched: Boolean(watchedTabs[String(tabId)])
   };
@@ -59,19 +60,18 @@ async function setTabMonitoring(tabId, url, enabled) {
     return;
   }
 
-  const { [WATCHED_TABS_KEY]: watchedTabs = {} } = await chrome.storage.local.get(WATCHED_TABS_KEY);
-  const next = { ...watchedTabs };
+  await updateStoredObject(WATCHED_TABS_KEY, (next) => {
+    if (enabled) {
+      next[String(tabId)] = {
+        url,
+        enabledAt: new Date().toISOString()
+      };
+      return next;
+    }
 
-  if (enabled) {
-    next[String(tabId)] = {
-      url,
-      enabledAt: new Date().toISOString()
-    };
-  } else {
     delete next[String(tabId)];
-  }
-
-  await chrome.storage.local.set({ [WATCHED_TABS_KEY]: next });
+    return next;
+  });
 }
 
 async function sendTestEvent(tabId, url) {
@@ -79,7 +79,7 @@ async function sendTestEvent(tabId, url) {
     type: "page_update",
     tabId: tabId || -1,
     url: url || "https://example.com",
-    title: "Website Updater Test",
+    title: "Revere Test",
     summary: "Manual extension test notification.",
     fingerprint: `manual-test:${Date.now()}`,
     profile: "manual",
@@ -142,7 +142,15 @@ async function dispatchEvent(event, providedSettings) {
     }
   }
 
-  if (settings.webhookUrl) {
+  if (settings.subscriptionName) {
+    try {
+      await postNtfy(settings, event);
+    } catch (error) {
+      console.error("ntfy delivery failed:", error);
+    }
+  }
+
+  if (shouldPostWebhook(settings)) {
     try {
       await postWebhook(settings.webhookUrl, event);
     } catch (error) {
@@ -153,7 +161,7 @@ async function dispatchEvent(event, providedSettings) {
 
 async function getSettings() {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
-  return result[SETTINGS_KEY] || {};
+  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
 }
 
 async function appendEvent(event) {
@@ -179,20 +187,41 @@ async function postWebhook(webhookUrl, event) {
   }
 }
 
+async function postNtfy(settings, event) {
+  const topic = normalizeSubscriptionName(settings.subscriptionName);
+  const server = trimTrailingSlash(settings.ntfyServer || DEFAULT_SETTINGS.ntfyServer);
+  const response = await fetch(`${server}/${encodeURIComponent(topic)}`, {
+    method: "POST",
+    headers: {
+      Title: event.title || "Website update",
+      Priority: "urgent",
+      Tags: event.profile === "sports" ? "rotating_light,trophy" : "rotating_light,bell",
+      Click: event.url || ""
+    },
+    body: formatEvent(event)
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `ntfy request failed with status ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`
+    );
+  }
+}
+
 async function rememberNotificationTarget(notificationId, url) {
   if (!url) {
     return;
   }
 
-  const { [NOTIFICATION_TARGETS_KEY]: targets = {} } =
-    await chrome.storage.local.get(NOTIFICATION_TARGETS_KEY);
-  const next = { ...targets, [notificationId]: url };
-  await chrome.storage.local.set({ [NOTIFICATION_TARGETS_KEY]: next });
+  await updateStoredObject(NOTIFICATION_TARGETS_KEY, (next) => ({
+    ...next,
+    [notificationId]: url
+  }));
 }
 
 chrome.notifications.onClicked.addListener(async (notificationId) => {
-  const { [NOTIFICATION_TARGETS_KEY]: targets = {} } =
-    await chrome.storage.local.get(NOTIFICATION_TARGETS_KEY);
+  const targets = await getStoredObject(NOTIFICATION_TARGETS_KEY);
   const url = targets[notificationId];
   if (!url) {
     return;
@@ -200,15 +229,76 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
 
   await chrome.tabs.create({ url });
   await chrome.notifications.clear(notificationId);
+  await removeStoredKey(NOTIFICATION_TARGETS_KEY, notificationId);
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const { [WATCHED_TABS_KEY]: watchedTabs = {} } = await chrome.storage.local.get(WATCHED_TABS_KEY);
+  const watchedTabs = await getStoredObject(WATCHED_TABS_KEY);
   if (!watchedTabs[String(tabId)]) {
     return;
   }
 
-  const next = { ...watchedTabs };
-  delete next[String(tabId)];
-  await chrome.storage.local.set({ [WATCHED_TABS_KEY]: next });
+  await removeStoredKey(WATCHED_TABS_KEY, String(tabId));
 });
+
+async function getStoredObject(key) {
+  const result = await chrome.storage.local.get(key);
+  return result[key] || {};
+}
+
+async function updateStoredObject(key, updater) {
+  const next = updater({ ...(await getStoredObject(key)) });
+  await chrome.storage.local.set({ [key]: next });
+}
+
+async function removeStoredKey(key, nestedKey) {
+  await updateStoredObject(key, (next) => {
+    delete next[nestedKey];
+    return next;
+  });
+}
+
+function formatEvent(event) {
+  return [
+    event.title || "Website update",
+    event.summary || "Meaningful page update detected.",
+    event.url || "",
+    event.timestamp || new Date().toISOString()
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function trimTrailingSlash(value) {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function normalizeSubscriptionName(value) {
+  const name = String(value || "").trim().toLowerCase();
+  if (!/^[a-z0-9._-]{3,64}$/.test(name)) {
+    throw new Error(
+      "ntfy topic names must be 3-64 characters and use only letters, numbers, dots, underscores, or dashes."
+    );
+  }
+  return name;
+}
+
+function shouldPostWebhook(settings) {
+  if (!settings.webhookUrl) {
+    return false;
+  }
+
+  if (!settings.subscriptionName) {
+    return true;
+  }
+
+  try {
+    const url = new URL(settings.webhookUrl);
+    const isLocalBridge =
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1") &&
+      url.pathname === "/event";
+    return !isLocalBridge;
+  } catch (error) {
+    return true;
+  }
+}

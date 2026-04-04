@@ -5,7 +5,37 @@ const PRICE_SCAN_INTERVAL_MS = 2000;
 const SNAPSHOT_SCAN_INTERVAL_MS = 4000;
 const MAX_CANDIDATES = 20;
 const MAX_SNAPSHOT_BLOCKS = 12;
-const INJECTED_EVENT_NAME = "website-updater-network-message";
+const INJECTED_EVENT_NAME = "revere-network-message";
+const PRICE_SELECTORS = [
+  "[data-price]",
+  "[data-test='price']",
+  "[data-testid='price']",
+  "[class*='price']",
+  "[class*='ticker']",
+  "[class*='quote']",
+  "h1",
+  "h2"
+].join(", ");
+const SNAPSHOT_SELECTORS = [
+  "main",
+  "article",
+  "[role='main']",
+  "section",
+  "li",
+  "article a",
+  "section a",
+  "main a",
+  "h1",
+  "h2",
+  "h3"
+].join(", ");
+const CARD_CLASS_PATTERN = /(card|item|tile|product|listing|drop|grid|row|score|matchup|game|price|ticker|quote)/;
+const IGNORE_CLASS_PATTERN = /(countdown|timer|carousel|slider|ticker|marquee|toast|modal)/;
+const IGNORE_ID_PATTERN = /(countdown|timer|toast|modal)/;
+const LOADING_TEXT_PATTERN = /^(loading|please wait|updated just now|just now)$/i;
+const SIMPLE_CLOCK_PATTERN = /^\d{1,2}:\d{2}(?::\d{2})?$/;
+const PRICE_KEYWORDS = ["price", "ticker", "quote"];
+const SPORTS_KEYWORDS = ["score", "goal", "touchdown", "home_score", "away_score", "clock", "period", "inning", "quarter"];
 const PRICE_REGEX = /\$?(?:\d{1,3}(?:,\d{3})+|\d{4,6}|\d{1,3})(?:\.\d{1,8})?/;
 
 const pendingNodes = new Set();
@@ -216,49 +246,18 @@ function buildSnapshotCandidate() {
 }
 
 function collectSnapshotBlocks() {
-  const selectors = [
-    "main",
-    "article",
-    "[role='main']",
-    "section",
-    "li",
-    "article a",
-    "section a",
-    "main a",
-    "h1",
-    "h2",
-    "h3"
-  ];
   const blocks = [];
   const seen = new Set();
 
-  const title = normalizeText(document.title || "");
-  if (isSnapshotWorthy(title)) {
-    blocks.push(title);
-    seen.add(title);
-  }
-
-  for (const selector of selectors) {
-    const elements = document.querySelectorAll(selector);
-    for (const element of elements) {
-      if (!(element instanceof HTMLElement) || !isVisible(element) || shouldIgnoreNode(element)) {
-        continue;
-      }
-
-      const text = normalizeText(element.innerText || element.textContent || "");
-      if (!isSnapshotWorthy(text) || seen.has(text)) {
-        continue;
-      }
-
-      blocks.push(text);
-      seen.add(text);
-
-      if (blocks.length >= MAX_SNAPSHOT_BLOCKS) {
-        return blocks;
-      }
-    }
-  }
-
+  pushUniqueText(blocks, seen, document.title, isSnapshotWorthy);
+  collectVisibleTexts(
+    SNAPSHOT_SELECTORS,
+    MAX_SNAPSHOT_BLOCKS - blocks.length,
+    isSnapshotWorthy,
+    seen,
+    blocks,
+    (text) => text
+  );
   return blocks;
 }
 
@@ -280,66 +279,21 @@ function isSnapshotWorthy(text) {
   }
 
   const normalized = text.toLowerCase();
-  if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(normalized)) {
+  if (SIMPLE_CLOCK_PATTERN.test(normalized)) {
     return false;
   }
 
-  if (/^(loading|please wait|updated just now|just now)$/i.test(text)) {
-    return false;
-  }
-
-  return true;
+  return !LOADING_TEXT_PATTERN.test(text);
 }
 
 function collectPriceSamples() {
   const samples = [];
-  const title = normalizeText(document.title || "");
-  if (looksLikeBitcoinContext(title)) {
-    samples.push({ text: title, source: "title" });
-  }
-
-  const selectors = [
-    "[data-price]",
-    "[data-test='price']",
-    "[data-testid='price']",
-    "[class*='price']",
-    "[class*='ticker']",
-    "[class*='quote']",
-    "h1",
-    "h2"
-  ];
-
-  for (const selector of selectors) {
-    const elements = document.querySelectorAll(selector);
-    for (const element of elements) {
-      if (!(element instanceof HTMLElement) || !isVisible(element)) {
-        continue;
-      }
-
-      const text = normalizeText(element.innerText || element.textContent || "");
-      if (!text) {
-        continue;
-      }
-
-      const selectorLooksPriceLike =
-        selector.includes("price") || selector.includes("ticker") || selector.includes("quote");
-      const allowByPageContext =
-        siteProfile.name === "crypto" && pageHasBitcoinContext && selectorLooksPriceLike;
-
-      if (!looksLikeBitcoinContext(text) && !allowByPageContext) {
-        continue;
-      }
-
-      if (!PRICE_REGEX.test(text)) {
-        continue;
-      }
-
-      samples.push({ text, source: selector });
-      if (samples.length >= 8) {
-        return samples;
-      }
-    }
-  }
+  pushUniqueText(samples, new Set(), document.title, looksLikeBitcoinContext, "title");
+  collectVisibleTexts(PRICE_SELECTORS, 7, (text, element) => {
+    const selectorHintsPrice = PRICE_KEYWORDS.some((word) => element.matches?.(`[class*='${word}'], [data-${word}], [data-test='${word}'], [data-testid='${word}']`));
+    const allowByPageContext = siteProfile.name === "crypto" && pageHasBitcoinContext && selectorHintsPrice;
+    return PRICE_REGEX.test(text) && (looksLikeBitcoinContext(text) || allowByPageContext);
+  }, new Set(samples.map((sample) => sample.text)), samples, (text) => ({ text, source: "page" }));
 
   const bodyText = normalizeText(document.body?.innerText || "").slice(0, 5000);
   if (looksLikeBitcoinContext(bodyText)) {
@@ -404,22 +358,16 @@ function flushCandidates() {
     return;
   }
 
-  const candidates = [];
+  let best = null;
   for (const node of pendingNodes) {
     const candidate = buildDomCandidate(node);
-    if (candidate) {
-      candidates.push(candidate);
+    if (candidate && (!best || candidate.score > best.score)) {
+      best = candidate;
     }
   }
 
   pendingNodes.clear();
 
-  if (!candidates.length) {
-    return;
-  }
-
-  candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
   if (!best) {
     return;
   }
@@ -542,8 +490,7 @@ function extractSportsSignal(payload) {
   const normalized = payload.toLowerCase();
   const scoreMatch = payload.match(/\b([A-Z]{2,4}|\d{1,2})\s{0,2}(\d{1,3})\s*[-:]\s*(\d{1,3})\s{0,2}([A-Z]{2,4}|\d{1,2})\b/);
   const gameStateMatch = payload.match(/\b(q[1-4]|ot|final|halftime|period\s*\d|inning\s*\d)\b/i);
-  const keywords = ["score", "goal", "touchdown", "home_score", "away_score", "clock", "period", "inning", "quarter"];
-  const keywordHits = keywords.filter((word) => normalized.includes(word)).length;
+  const keywordHits = SPORTS_KEYWORDS.filter((word) => normalized.includes(word)).length;
 
   if (!scoreMatch && keywordHits < 2 && !gameStateMatch) {
     return null;
@@ -602,7 +549,7 @@ function looksLikeCard(node) {
   return (
     ["article", "li", "section", "a"].includes(tag) ||
     role === "listitem" ||
-    /(card|item|tile|product|listing|drop|grid|row|score|matchup|game|price|ticker|quote)/.test(className)
+    CARD_CLASS_PATTERN.test(className)
   );
 }
 
@@ -618,17 +565,19 @@ function extractLines(element) {
     .filter(Boolean);
 
   const unique = [];
+  const seen = new Set();
   for (const line of rawLines) {
     if (
       (!looksLikeCompactPriceLine(line) && line.length < siteProfile.minLineLength) ||
       line.length > 120 ||
       isIgnoredText(line) ||
-      unique.includes(line)
+      seen.has(line)
     ) {
       continue;
     }
 
     unique.push(line);
+    seen.add(line);
     if (unique.length === 5) {
       break;
     }
@@ -643,10 +592,11 @@ function looksLikeCompactPriceLine(line) {
 
 function scoreCandidate(element, lines) {
   let score = 0;
-  const combined = lines.join(" ").toLowerCase();
+  const combinedText = lines.join(" ");
+  const combined = combinedText.toLowerCase();
   const className = (element.className || "").toString().toLowerCase();
 
-  score += Math.min(lines.join(" ").length / 20, 6);
+  score += Math.min(combinedText.length / 20, 6);
   score += Math.min(lines.length, 4);
 
   if (element.querySelector("a[href]")) {
@@ -657,7 +607,7 @@ function scoreCandidate(element, lines) {
     score += 1;
   }
 
-  if (/(product|item|card|tile|listing|grid|score|game|price|ticker|quote)/.test(className)) {
+  if (CARD_CLASS_PATTERN.test(className)) {
     score += 2;
   }
 
@@ -697,11 +647,11 @@ function shouldIgnoreNode(node) {
     return true;
   }
 
-  if (/(countdown|timer|carousel|slider|ticker|marquee|toast|modal)/.test(className)) {
+  if (IGNORE_CLASS_PATTERN.test(className)) {
     return true;
   }
 
-  if (/(countdown|timer|toast|modal)/.test(id)) {
+  if (IGNORE_ID_PATTERN.test(id)) {
     return true;
   }
 
@@ -729,6 +679,42 @@ function isIgnoredText(text) {
   }
 
   return siteProfile.noiseWords.some((word) => normalized.includes(word));
+}
+
+function collectVisibleTexts(selector, limit, predicate, seen, target, mapItem) {
+  if (limit <= 0) {
+    return target;
+  }
+
+  const initialLength = target.length;
+  for (const element of document.querySelectorAll(selector)) {
+    if (!(element instanceof HTMLElement) || !isVisible(element) || shouldIgnoreNode(element)) {
+      continue;
+    }
+
+    const text = normalizeText(element.innerText || element.textContent || "");
+    if (!text || seen.has(text) || !predicate(text, element)) {
+      continue;
+    }
+
+    target.push(mapItem(text, element));
+    seen.add(text);
+    if (target.length - initialLength >= limit) {
+      break;
+    }
+  }
+
+  return target;
+}
+
+function pushUniqueText(target, seen, text, predicate, source = "") {
+  const normalized = normalizeText(text || "");
+  if (!normalized || seen.has(normalized) || !predicate(normalized)) {
+    return;
+  }
+
+  target.push(source ? { text: normalized, source } : normalized);
+  seen.add(normalized);
 }
 
 function detectSiteProfile(hostname) {

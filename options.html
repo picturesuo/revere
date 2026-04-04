@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Website Updater Options</title>
+    <title>Revere Options</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -42,10 +42,18 @@
     </style>
   </head>
   <body>
-    <h1>Website Updater Options</h1>
+    <h1>Revere Options</h1>
     <div class="row">
       <label for="webhook-url">Webhook URL</label>
       <input id="webhook-url" type="url" placeholder="https://example.com/webhook">
+    </div>
+    <div class="row">
+      <label for="ntfy-server">ntfy server</label>
+      <input id="ntfy-server" type="url" placeholder="https://ntfy.sh">
+    </div>
+    <div class="row">
+      <label for="subscription-name">ntfy topic name</label>
+      <input id="subscription-name" type="text" placeholder="your-private-topic-name">
     </div>
     <div class="row">
       <label>
@@ -53,6 +61,7 @@
         Enable Chrome notifications
       </label>
     </div>
+    <p>When you save an `ntfy` topic here, the extension sends phone pushes directly to that topic. The webhook stays optional for custom bridges.</p>
     <button id="save">Save</button>
     <p id="message"></p>
     <script src="options.js"></script>

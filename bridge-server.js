@@ -1,8 +1,14 @@
 const http = require("http");
-const { URL } = require("url");
 
 const PORT = Number(process.env.PORT || 8787);
 const MODE = process.env.BRIDGE_MODE || "log";
+const SENDERS = {
+  log: async (event) => console.log(formatEvent(event)),
+  twilio_whatsapp: sendViaTwilio,
+  meta_whatsapp: sendViaMeta,
+  ntfy: sendViaNtfy,
+  telegram: sendViaTelegram
+};
 
 const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/health") {
@@ -21,41 +27,33 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/validate-subscription-name") {
+    try {
+      const payload = await readJson(req);
+      const name = normalizeSubscriptionName(payload.name);
+      const available = MODE !== "ntfy" ? true : !(await ntfyTopicHasMessages(name));
+      writeJson(res, 200, { ok: true, available });
+    } catch (error) {
+      writeJson(res, 400, { ok: false, error: error.message });
+    }
+    return;
+  }
+
   writeJson(res, 404, { ok: false, error: "Not found" });
 });
 
 server.listen(PORT, () => {
-  console.log(`Website Updater bridge listening on http://localhost:${PORT}`);
+  console.log(`Revere bridge listening on http://localhost:${PORT}`);
   console.log(`Mode: ${MODE}`);
 });
 
 async function dispatchEvent(event) {
-  if (MODE === "log") {
-    console.log(formatEvent(event));
-    return;
+  const sender = SENDERS[MODE];
+  if (!sender) {
+    throw new Error(`Unsupported BRIDGE_MODE: ${MODE}`);
   }
 
-  if (MODE === "twilio_whatsapp") {
-    await sendViaTwilio(event);
-    return;
-  }
-
-  if (MODE === "meta_whatsapp") {
-    await sendViaMeta(event);
-    return;
-  }
-
-  if (MODE === "ntfy") {
-    await sendViaNtfy(event);
-    return;
-  }
-
-  if (MODE === "telegram") {
-    await sendViaTelegram(event);
-    return;
-  }
-
-  throw new Error(`Unsupported BRIDGE_MODE: ${MODE}`);
+  await sender(event);
 }
 
 function formatEvent(event) {
@@ -128,7 +126,9 @@ async function sendViaMeta(event) {
 }
 
 async function sendViaNtfy(event) {
-  const topic = requiredEnv("NTFY_TOPIC");
+  const topic = event.subscriptionName
+    ? normalizeSubscriptionName(event.subscriptionName)
+    : requiredEnv("NTFY_TOPIC");
   const server = process.env.NTFY_SERVER || "https://ntfy.sh";
   const response = await fetch(`${trimTrailingSlash(server)}/${topic}`, {
     method: "POST",
@@ -145,6 +145,32 @@ async function sendViaNtfy(event) {
     const text = await response.text();
     throw new Error(`ntfy request failed with status ${response.status}: ${text}`);
   }
+}
+
+async function ntfyTopicHasMessages(name) {
+  const server = process.env.NTFY_SERVER || "https://ntfy.sh";
+  const response = await fetch(
+    `${trimTrailingSlash(server)}/${encodeURIComponent(name)}/json?poll=1&since=all&limit=1`
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`ntfy validation failed with status ${response.status}: ${text}`);
+  }
+
+  const body = await response.text();
+  return body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .some((line) => {
+      try {
+        const message = JSON.parse(line);
+        return message.event === "message";
+      } catch (error) {
+        return false;
+      }
+    });
 }
 
 async function sendViaTelegram(event) {
@@ -200,4 +226,14 @@ function writeJson(res, status, payload) {
 
 function trimTrailingSlash(value) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function normalizeSubscriptionName(value) {
+  const name = String(value || "").trim().toLowerCase();
+  if (!/^[a-z0-9._-]{3,64}$/.test(name)) {
+    throw new Error(
+      "Subscription names must be 3-64 characters and use only letters, numbers, dots, underscores, or dashes."
+    );
+  }
+  return name;
 }
