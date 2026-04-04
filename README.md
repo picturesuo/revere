@@ -1,6 +1,8 @@
-# Website Updater
+# Revere
 
-Website Updater is a simple tool for telling you whenever a website changes. It sends a push notification to your phone through the `ntfy` app within a few seconds of the website update. You can use it for live sports, breaking news, marketplace changes, and attendance or student systems in college.
+Revere is a simple tool for telling you whenever a website changes. It sends a push notification to your phone through the `ntfy` app within a few seconds of the website update. You can use it for live sports, breaking news, marketplace changes, and attendance or student systems in college.
+
+![Revere artwork](assets/paul-revere-ride.png)
 
 ## Why Chrome Extension
 
@@ -25,7 +27,7 @@ The script runs inside the watched page and uses:
 
 1. Open the website you want to monitor.
 2. Log in if needed.
-3. Click the extension icon and open Website Updater.
+3. Click the extension icon and open Revere.
 4. Press `Start Monitoring`.
 5. Keep the tab open.
 6. You can work in other apps or other websites, and as long as the watched tab stays open with tracking enabled, you will keep getting live alerts.
