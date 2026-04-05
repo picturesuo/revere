@@ -3,67 +3,334 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Revere Options</title>
+    <title>Revere Dashboard</title>
     <style>
+      :root {
+        --bg: #0b0f17;
+        --panel: #121826;
+        --panel-soft: #171f31;
+        --text: #f3f6ff;
+        --muted: #94a0ba;
+        --line: rgba(148, 160, 186, 0.16);
+        --accent: #7c9cff;
+        --success: #39d98a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        font-family: Arial, sans-serif;
         margin: 0;
-        max-width: 720px;
-        padding: 24px;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Avenir Next", "Poppins", "Helvetica Neue", sans-serif;
+      }
+
+      .page {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 28px 20px 40px;
+      }
+
+      .shell {
+        display: grid;
+        gap: 16px;
+      }
+
+      .topbar,
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+      }
+
+      .topbar {
+        padding: 20px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
       }
 
       h1 {
-        margin-top: 0;
+        font-size: 34px;
+        letter-spacing: -0.04em;
       }
 
-      label,
-      input {
+      .lead {
+        margin-top: 8px;
+        max-width: 720px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .stat {
+        padding: 14px;
+        border-radius: 16px;
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+      }
+
+      .stat-label {
         display: block;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .stat-value {
+        display: block;
+        margin-top: 8px;
+        font-size: 22px;
+        font-weight: 700;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        padding: 18px;
+      }
+
+      .panel h2 {
+        font-size: 18px;
+        letter-spacing: -0.02em;
+      }
+
+      .sub {
+        margin-top: 6px;
+        margin-bottom: 14px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .item,
+      .empty {
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+      }
+
+      .item-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: flex-start;
+      }
+
+      .title {
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .meta {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .badge {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(124, 156, 255, 0.12);
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .empty {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+
+      input,
+      select,
+      button {
+        font: inherit;
+      }
+
+      input,
+      select {
         width: 100%;
+        padding: 11px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--panel-soft);
+        color: var(--text);
       }
 
-      input[type="url"] {
-        margin: 8px 0 16px;
-        padding: 10px;
+      .two-up {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
       }
 
-      .row {
-        margin-bottom: 16px;
+      .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 12px;
       }
 
       button {
-        padding: 10px 14px;
+        border: 0;
+        border-radius: 12px;
+        padding: 11px 14px;
+        cursor: pointer;
       }
 
-      #message {
+      .primary {
+        background: var(--accent);
+        color: #08101f;
+        font-weight: 700;
+      }
+
+      .secondary {
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        color: var(--text);
+      }
+
+      .message {
         margin-top: 12px;
-        color: #444;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 900px) {
+        .grid,
+        .stats,
+        .two-up {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
   <body>
-    <h1>Revere Options</h1>
-    <div class="row">
-      <label for="webhook-url">Webhook URL</label>
-      <input id="webhook-url" type="url" placeholder="https://example.com/webhook">
+    <div class="page">
+      <div class="shell">
+        <section class="topbar">
+          <h1>Revere</h1>
+          <p class="lead">Simple control panel for live alerts. Track your watches, confirm your phone setup, and send a test without digging through clutter.</p>
+          <div class="stats">
+            <div class="stat">
+              <span class="stat-label">Live Watches</span>
+              <span class="stat-value" id="stat-watches">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Recent Events</span>
+              <span class="stat-value" id="stat-events">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Last Alert</span>
+              <span class="stat-value" id="stat-last">None</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Destinations</span>
+              <span class="stat-value" id="stat-destinations">Desktop</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="grid">
+          <div class="stack">
+            <section class="panel">
+              <h2>Watches</h2>
+              <p class="sub">What is armed right now.</p>
+              <div class="list" id="watch-list"></div>
+            </section>
+
+            <section class="panel">
+              <h2>Recent Events</h2>
+              <p class="sub">The latest things Revere actually caught.</p>
+              <div class="list" id="event-list"></div>
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel">
+              <h2>Alert Settings</h2>
+              <p class="sub">Desktop, phone push, and test controls.</p>
+              <label>
+                Webhook URL
+                <input id="webhook-url" type="url" placeholder="http://localhost:8787/event">
+              </label>
+              <div class="two-up">
+                <label>
+                  ntfy server
+                  <input id="ntfy-server" type="url" placeholder="https://ntfy.sh">
+                </label>
+                <label>
+                  ntfy topic
+                  <input id="subscription-name" type="text" placeholder="your-private-topic">
+                </label>
+              </div>
+              <label>
+                <input id="notifications-enabled" type="checkbox">
+                Enable desktop notifications
+              </label>
+              <div class="actions">
+                <button class="primary" id="save">Save Settings</button>
+                <button class="secondary" id="send-test">Send Test Notification</button>
+              </div>
+              <p class="message" id="message"></p>
+            </section>
+
+            <section class="panel">
+              <h2>Selected Watch</h2>
+              <p class="sub">A clean detail view for the watch you click on.</p>
+              <div class="list" id="watch-detail"></div>
+            </section>
+
+            <section class="panel">
+              <h2>Quick Start</h2>
+              <p class="sub">Three things that matter.</p>
+              <div class="list" id="steps"></div>
+            </section>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="row">
-      <label for="ntfy-server">ntfy server</label>
-      <input id="ntfy-server" type="url" placeholder="https://ntfy.sh">
-    </div>
-    <div class="row">
-      <label for="subscription-name">ntfy topic name</label>
-      <input id="subscription-name" type="text" placeholder="your-private-topic-name">
-    </div>
-    <div class="row">
-      <label>
-        <input id="notifications-enabled" type="checkbox">
-        Enable Chrome notifications
-      </label>
-    </div>
-    <p>When you save an `ntfy` topic here, the extension sends phone pushes directly to that topic. The webhook stays optional for custom bridges.</p>
-    <button id="save">Save</button>
-    <p id="message"></p>
     <script src="options.js"></script>
   </body>
 </html>
