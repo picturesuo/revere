@@ -11,9 +11,8 @@
         --panel-soft: #171f31;
         --text: #f3f6ff;
         --muted: #94a0ba;
-        --line: rgba(148, 160, 186, 0.18);
+        --line: rgba(148, 160, 186, 0.16);
         --accent: #7c9cff;
-        --accent-strong: #5d80ff;
         --success: #39d98a;
       }
 
@@ -23,14 +22,14 @@
 
       body {
         margin: 0;
-        min-width: 340px;
+        min-width: 300px;
         background: var(--bg);
         color: var(--text);
         font-family: "Avenir Next", "Poppins", "Helvetica Neue", sans-serif;
       }
 
       main {
-        padding: 16px;
+        padding: 14px;
       }
 
       .shell {
@@ -41,15 +40,15 @@
       .card {
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 16px;
+        border-radius: 16px;
+        padding: 14px;
       }
 
       .header {
         display: flex;
-        align-items: flex-start;
         justify-content: space-between;
-        gap: 12px;
+        align-items: center;
+        gap: 8px;
         margin-bottom: 12px;
       }
 
@@ -60,62 +59,39 @@
       }
 
       h1 {
-        font-size: 22px;
+        font-size: 20px;
         letter-spacing: -0.03em;
       }
 
       h2 {
-        font-size: 14px;
-      }
-
-      .sub {
-        margin-top: 6px;
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.45;
+        font-size: 13px;
       }
 
       .badge {
-        padding: 8px 10px;
+        padding: 7px 9px;
         border-radius: 999px;
         background: var(--panel-soft);
         border: 1px solid var(--line);
         color: var(--muted);
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 700;
-        white-space: nowrap;
+        text-transform: uppercase;
       }
 
-      .status {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 14px;
-        font-size: 13px;
-        color: var(--muted);
-      }
-
-      .dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 999px;
-        background: #4e5972;
-      }
-
-      .dot.live {
-        background: var(--success);
+      .badge.live {
+        color: var(--success);
       }
 
       .meta {
         display: grid;
         gap: 8px;
-        margin-bottom: 14px;
+        margin-bottom: 12px;
       }
 
       .meta-row {
         display: flex;
         justify-content: space-between;
-        gap: 12px;
+        gap: 10px;
         font-size: 12px;
       }
 
@@ -126,30 +102,6 @@
       .meta-value {
         color: var(--text);
         text-align: right;
-      }
-
-      label {
-        display: grid;
-        gap: 6px;
-        font-size: 12px;
-        color: var(--muted);
-        margin-bottom: 10px;
-      }
-
-      input,
-      select,
-      button {
-        font: inherit;
-      }
-
-      input,
-      select {
-        width: 100%;
-        padding: 11px 12px;
-        border-radius: 12px;
-        border: 1px solid var(--line);
-        background: var(--panel-soft);
-        color: var(--text);
       }
 
       .actions {
@@ -163,6 +115,7 @@
         border-radius: 12px;
         padding: 11px 12px;
         cursor: pointer;
+        font: inherit;
       }
 
       .primary {
@@ -177,12 +130,20 @@
         color: var(--text);
       }
 
+      .sub {
+        margin-top: 4px;
+        margin-bottom: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
       .events {
         display: grid;
         gap: 8px;
       }
 
-      .event {
+      .event-card,
+      .empty {
         padding: 10px 12px;
         border-radius: 12px;
         background: var(--panel-soft);
@@ -198,18 +159,14 @@
         color: var(--muted);
       }
 
-      .event-summary {
+      .event-summary,
+      .empty {
         font-size: 12px;
         line-height: 1.45;
-        color: var(--text);
       }
 
       .empty {
-        padding: 12px;
-        border-radius: 12px;
-        border: 1px dashed var(--line);
         color: var(--muted);
-        font-size: 12px;
       }
     </style>
   </head>
@@ -218,42 +175,21 @@
       <div class="shell">
         <section class="card">
           <div class="header">
-            <div>
-              <h1>Revere</h1>
-              <p class="sub">Watch one tab. Get the alert.</p>
-            </div>
-            <div class="badge" id="phone-status">Phone Off</div>
+            <h1>Revere</h1>
+            <div class="badge" id="monitor-badge">Not Monitoring</div>
           </div>
-          <div class="status">
-            <span class="dot" id="status-dot"></span>
-            <span id="status">Checking tab state...</span>
-          </div>
+
           <div class="meta">
             <div class="meta-row">
               <span class="meta-label">Site</span>
               <span class="meta-value" id="tab-domain">Current tab</span>
             </div>
             <div class="meta-row">
-              <span class="meta-label">Mode</span>
-              <span class="meta-value" id="mode-stat">Page</span>
-            </div>
-            <div class="meta-row">
               <span class="meta-label">Last Alert</span>
               <span class="meta-value" id="last-stat">None</span>
             </div>
           </div>
-          <label>
-            Watch name
-            <input id="watch-name" type="text" placeholder="BTC on Coinbase">
-          </label>
-          <label>
-            Detection mode
-            <select id="watch-mode">
-              <option value="price">Price Changes</option>
-              <option value="live">Live Feed</option>
-              <option value="page">Page Changes</option>
-            </select>
-          </label>
+
           <div class="actions">
             <button class="primary" id="toggle">Loading...</button>
             <button class="secondary" id="test">Send Test Notification</button>
@@ -262,8 +198,8 @@
         </section>
 
         <section class="card">
-          <h2>Recent</h2>
-          <p class="sub" style="margin-bottom:12px;">Latest signals only.</p>
+          <h2>Recents</h2>
+          <p class="sub">Latest alerts only.</p>
           <div class="events" id="events"></div>
         </section>
       </div>
