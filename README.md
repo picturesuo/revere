@@ -1,6 +1,6 @@
 # Revere
 
-Revere is a simple tool for telling you whenever a website changes. It sends a push notification to your phone through the `ntfy` app within a few seconds of the website update. You can use it for live sports, breaking news, marketplace changes, and attendance or student systems in college.
+Revere is a simple tool for telling you whenever a website changes. It sends a push notification to your phone through the `ntfy` app within a few seconds of the website update. You can use it to track updates of live sports, breaking news, marketplace changes, and live college attendence websites.
 
 ![Revere artwork](assets/paul-revere-ride.png)
 
