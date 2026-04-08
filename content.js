@@ -75,9 +75,7 @@ const INLINE_DISCUSSION_KEYWORDS = [
 const PRICE_REGEX = /\$?(?:\d{1,3}(?:,\d{3})+|\d{4,6}|\d{1,3})(?:\.\d{1,8})?/;
 const RECENT_FINGERPRINT_TTL_MS = 15000;
 const FINGERPRINT_CACHE_TTL_MS = 30000;
-const DEBUG_DOM_CANDIDATES =
-  location.search.includes("revereDebug=1") ||
-  globalThis.localStorage?.getItem("revereDebugDom") === "1";
+const DEBUG_DOM_CANDIDATES = false;
 
 const pendingNodes = new Set();
 const pendingNodeMeta = new Map();
@@ -495,10 +493,17 @@ function flushCandidates() {
   }
 
   const candidates = [];
+  const candidateLogs = [];
   for (const node of pendingNodes) {
     const candidate = buildDomCandidate(node, pendingNodeMeta.get(node));
     if (candidate) {
       candidates.push(candidate);
+      candidateLogs.push({
+        source: candidate.source,
+        score: candidate.score,
+        trigger: candidate.triggerSummary,
+        rootSize: candidate.rootTextLength
+      });
     }
   }
 
@@ -516,11 +521,13 @@ function flushCandidates() {
   for (const candidate of candidates) {
     if (isRecentlySentFingerprint(candidate.fingerprint, now)) {
       candidate.rejectionReason = "recent_fingerprint";
+      debugDomCandidates("duplicate_dom_candidate", candidateLogs, candidate);
       continue;
     }
 
     if (now - lastSentAt < EVENT_COOLDOWN_MS && candidate.source !== "dom_insert") {
       candidate.rejectionReason = "global_cooldown";
+      debugDomCandidates("cooldown_dom_candidate", candidateLogs, candidate);
       continue;
     }
 
@@ -528,7 +535,7 @@ function flushCandidates() {
     break;
   }
 
-  debugDomFlush(candidates, best);
+  debugDomCandidates("send_dom_candidate", candidateLogs, best);
 
   if (!best) {
     return;
@@ -536,7 +543,7 @@ function flushCandidates() {
 
   lastSentAt = now;
   rememberFingerprint(best.fingerprint, now);
-  sendEvent(best.summary, best.fingerprint, best.score, best.profile, best.source);
+  sendEvent(best.summary, best.fingerprint, best.score, best.profile || siteProfile.name, best.source);
 }
 
 function sendEvent(summary, fingerprint, score, profile, source) {
@@ -608,7 +615,6 @@ function buildDomCandidate(node, meta = {}) {
   const summaryText = summaryLines.slice(0, 3).join(" | ");
   const fingerprintSeed = [
     meta.mutationKind || "text",
-    getNodePath(candidateRoot),
     getNodePath(triggerNode),
     summaryText
   ].join(" | ");
@@ -1386,30 +1392,15 @@ function getFlushDelayMs() {
   return FLUSH_DELAY_MS;
 }
 
-function debugDomFlush(candidates, best) {
+function debugDomCandidates(reason, candidateLogs, best) {
   if (!DEBUG_DOM_CANDIDATES) {
     return;
   }
 
   console.debug("Revere DOM candidates", {
-    winningCandidate: best
-      ? {
-          source: best.source,
-          score: best.score,
-          summary: best.summary,
-          triggerText: best.triggerSummary,
-          rootTextLength: best.rootTextLength
-        }
-      : null,
-    topCandidates: candidates.slice(0, 5).map((candidate) => ({
-      source: candidate.source,
-      score: candidate.score,
-      summary: candidate.summary,
-      triggerText: candidate.triggerSummary,
-      rootTextLength: candidate.rootTextLength,
-      mutationKind: candidate.mutationKind,
-      rejectionReason: candidate.rejectionReason || ""
-    }))
+    reason,
+    best,
+    candidates: candidateLogs.slice(0, 5)
   });
 }
 
