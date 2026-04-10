@@ -80,6 +80,7 @@ const DEBUG_DOM_CANDIDATES = false;
 const pendingNodes = new Set();
 const pendingNodeMeta = new Map();
 const recentDomFingerprints = new Map();
+const candidateStateSnapshots = new WeakMap();
 
 let flushTimer = null;
 let domObserver = null;
@@ -150,6 +151,10 @@ function startDomObserver() {
       if (mutation.type === "characterData") {
         collectCandidateNode(mutation.target?.parentElement, "text");
       }
+
+      if (mutation.type === "attributes") {
+        collectCandidateNode(mutation.target, "attribute");
+      }
     }
 
     scheduleFlush();
@@ -158,7 +163,9 @@ function startDomObserver() {
   domObserver.observe(document.documentElement, {
     childList: true,
     subtree: true,
-    characterData: true
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["class", "style", "hidden", "aria-hidden", "disabled"]
   });
 }
 
@@ -453,8 +460,14 @@ function collectCandidateNode(node, mutationKind = "text") {
 
   pendingNodes.add(node);
   const previous = pendingNodeMeta.get(node);
+  const nextMutationKind =
+    previous?.mutationKind === "insert"
+      ? "insert"
+      : previous?.mutationKind === "attribute" || mutationKind === "attribute"
+        ? "attribute"
+        : mutationKind;
   pendingNodeMeta.set(node, {
-    mutationKind: previous?.mutationKind === "insert" ? "insert" : mutationKind,
+    mutationKind: nextMutationKind,
     seenAt: previous?.seenAt || Date.now()
   });
 
@@ -478,6 +491,7 @@ function tryDispatchImmediateInsertCandidate(node) {
 
   rememberFingerprint(candidate.fingerprint, now);
   lastSentAt = now;
+  updateCandidateStateSnapshot(node);
   sendEvent(candidate.summary, candidate.fingerprint, candidate.score, candidate.profile, "dom_insert");
   return true;
 }
@@ -496,13 +510,16 @@ function flushCandidates() {
   const candidateLogs = [];
   for (const node of pendingNodes) {
     const candidate = buildDomCandidate(node, pendingNodeMeta.get(node));
+    updateCandidateStateSnapshot(node);
     if (candidate) {
       candidates.push(candidate);
       candidateLogs.push({
         source: candidate.source,
         score: candidate.score,
         trigger: candidate.triggerSummary,
-        rootSize: candidate.rootTextLength
+        rootSize: candidate.rootTextLength,
+        mutationKind: candidate.mutationKind,
+        availabilityBoosted: candidate.availabilityBoosted
       });
     }
   }
@@ -536,6 +553,7 @@ function flushCandidates() {
   }
 
   debugDomCandidates("send_dom_candidate", candidateLogs, best);
+  debugSuddenlyAvailableWinner(best);
 
   if (!best) {
     return;
@@ -587,6 +605,10 @@ function buildDomCandidate(node, meta = {}) {
     return null;
   }
 
+  const previousSnapshot = getClosestCandidateSnapshot(triggerNode) || getClosestCandidateSnapshot(node);
+  const currentSnapshot = getElementStateSnapshot(triggerNode);
+  const availabilityState = getAvailabilityState(triggerNode, previousSnapshot, meta.mutationKind);
+
   const candidateRoot = elevateCandidate(triggerNode, triggerLines);
   if (!candidateRoot || shouldIgnoreNode(candidateRoot) || !isVisible(candidateRoot)) {
     return null;
@@ -595,9 +617,10 @@ function buildDomCandidate(node, meta = {}) {
   const lines = extractLines(candidateRoot, {
     allowShortFeedLine:
       meta.mutationKind === "insert" &&
-      (looksLikeRepeatedFeedItem(candidateRoot) || hasRepeatedSiblingStructure(candidateRoot))
+      (looksLikeRepeatedFeedItem(candidateRoot) || hasRepeatedSiblingStructure(candidateRoot)),
+    allowShortInteractiveLine: looksLikeSuddenlyAvailableAction(triggerNode)
   });
-  const summaryLines = triggerLines.length ? triggerLines : lines;
+  const summaryLines = looksLikeSuddenlyAvailableAction(triggerNode) ? triggerLines : (triggerLines.length ? triggerLines : lines);
   const nearbyContext = getNearbySectionContext(candidateRoot);
   const score = scoreCandidate(candidateRoot, lines, {
     triggerNode,
@@ -605,10 +628,14 @@ function buildDomCandidate(node, meta = {}) {
     candidateRoot,
     nearbyContext,
     mutationKind: meta.mutationKind || "text",
-    activeProfile
+    activeProfile,
+    previousSnapshot,
+    currentSnapshot,
+    availabilityState
   });
 
   if (!summaryLines.length || score < activeProfile.minScore) {
+    debugSuddenlyAvailableAction(meta.mutationKind, triggerNode, previousSnapshot, currentSnapshot, availabilityState, false, null);
     return null;
   }
 
@@ -619,21 +646,26 @@ function buildDomCandidate(node, meta = {}) {
     summaryText
   ].join(" | ");
 
-  return {
+  const candidate = {
     score,
     summary: `${activeProfile.prefix}: ${clip(summaryText)}`,
     fingerprint: `${location.hostname}:dom:${normalizeFingerprint(fingerprintSeed)}`,
-    source: meta.mutationKind === "insert" ? "dom_insert" : "dom_text",
+    source: meta.mutationKind === "attribute" ? "dom_attribute" : meta.mutationKind === "insert" ? "dom_insert" : "dom_text",
     profile: activeProfile.name,
     triggerSummary: summaryText,
     rootTextLength: normalizeText(candidateRoot.innerText || candidateRoot.textContent || "").length,
     mutationKind: meta.mutationKind || "text",
+    availabilityBoosted: availabilityState.becameAvailable,
     scoreDetails: {
       triggerLines,
       lines,
-      nearbyContext
+      nearbyContext,
+      availabilityState
     }
   };
+
+  debugSuddenlyAvailableAction(meta.mutationKind, triggerNode, previousSnapshot, currentSnapshot, availabilityState, true, candidate);
+  return candidate;
 }
 
 function buildNetworkCandidate(detail) {
@@ -816,6 +848,7 @@ function extractLines(element, options = {}) {
   }
 
   const allowShortFeedLine = Boolean(options.allowShortFeedLine);
+  const allowShortInteractiveLine = Boolean(options.allowShortInteractiveLine);
   const rawLines = text
     .split(/\n+/)
     .map((line) => normalizeText(line))
@@ -828,12 +861,19 @@ function extractLines(element, options = {}) {
       siteProfile.name === "learning" && isLearningCatalyticsSessionLine(line);
     const allowShortDiscussionLine = isInlineDiscussionLine(line);
     const allowShortGenericFeedLine = allowShortFeedLine && line.length >= 4 && !isIgnoredText(line, getActiveProfile());
+    const allowShortClickableLine =
+      allowShortInteractiveLine &&
+      isClickableElement(element) &&
+      isVisible(element) &&
+      line.length >= 3 &&
+      !isIgnoredText(line, getActiveProfile());
 
     if (
       (!looksLikeCompactPriceLine(line) &&
         !allowShortLearningCatalyticsLine &&
         !allowShortDiscussionLine &&
         !allowShortGenericFeedLine &&
+        !allowShortClickableLine &&
         line.length < getActiveProfile().minLineLength) ||
       line.length > 120 ||
       isIgnoredText(line, getActiveProfile()) ||
@@ -856,7 +896,8 @@ function extractTriggerLines(element, mutationKind = "text") {
   const lines = extractLines(element, {
     allowShortFeedLine:
       mutationKind === "insert" &&
-      (looksLikeRepeatedFeedItem(element) || hasRepeatedSiblingStructure(element))
+      (looksLikeRepeatedFeedItem(element) || hasRepeatedSiblingStructure(element)),
+    allowShortInteractiveLine: mutationKind === "attribute" || looksLikeSuddenlyAvailableAction(element)
   });
   if (lines.length) {
     return lines.slice(0, mutationKind === "insert" ? 4 : 3);
@@ -867,7 +908,12 @@ function extractTriggerLines(element, mutationKind = "text") {
     return [];
   }
 
-  if (mutationKind === "insert" && rawText.length >= 4 && rawText.length <= 220 && !isIgnoredText(rawText, getActiveProfile())) {
+  if (
+    ((mutationKind === "insert" && rawText.length >= 4) ||
+      ((mutationKind === "attribute" || isClickableElement(element)) && rawText.length >= 3)) &&
+    rawText.length <= 220 &&
+    !isIgnoredText(rawText, getActiveProfile())
+  ) {
     return [rawText];
   }
 
@@ -1042,6 +1088,8 @@ function scoreCandidate(element, lines, context = {}) {
   const triggerLines = context.triggerLines || [];
   const activeProfile = context.activeProfile || getActiveProfile();
   const nearbyContext = context.nearbyContext || [];
+  const triggerNode = context.triggerNode instanceof HTMLElement ? context.triggerNode : element;
+  const availabilityState = context.availabilityState || {};
 
   score += Math.min(combinedText.length / 20, 6);
   score += Math.min(lines.length, 4);
@@ -1096,6 +1144,22 @@ function scoreCandidate(element, lines, context = {}) {
     score += 3;
   }
 
+  if (availabilityState.becameVisible) {
+    score += 5;
+  }
+
+  if (availabilityState.becameEnabled || availabilityState.becameClickable) {
+    score += 4;
+  }
+
+  if (isClickableElement(triggerNode) && isVisible(triggerNode) && combinedText.length >= 4 && combinedText.length <= 80) {
+    score += 3;
+  }
+
+  if (looksLikeSuddenlyAvailableAction(triggerNode)) {
+    score += 3;
+  }
+
   const rect = element.getBoundingClientRect();
   const viewportArea = Math.max(window.innerWidth * window.innerHeight, 1);
   if ((rect.width * rect.height) / viewportArea > 0.35) {
@@ -1133,6 +1197,44 @@ function shouldIgnoreNode(node) {
   return false;
 }
 
+function isClickableElement(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tag = element.tagName.toLowerCase();
+  if (tag === "button" || tag === "a") {
+    return true;
+  }
+
+  if ((element.getAttribute("role") || "").toLowerCase() === "button") {
+    return true;
+  }
+
+  if (typeof element.onclick === "function" || element.hasAttribute("onclick")) {
+    return true;
+  }
+
+  const tabIndex = element.tabIndex;
+  return Number.isFinite(tabIndex) && tabIndex >= 0;
+}
+
+function isElementDisabled(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  return element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
+}
+
+function hasHiddenAttributes(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  return element.hidden || element.getAttribute("aria-hidden") === "true";
+}
+
 function isVisible(element) {
   const rect = element.getBoundingClientRect();
   const style = window.getComputedStyle(element);
@@ -1142,8 +1244,110 @@ function isVisible(element) {
     rect.height > 0 &&
     style.display !== "none" &&
     style.visibility !== "hidden" &&
-    style.opacity !== "0"
+    style.opacity !== "0" &&
+    !hasHiddenAttributes(element)
   );
+}
+
+function wasElementHiddenBefore(element, previousSnapshot, mutationKind = "text") {
+  if (previousSnapshot) {
+    return Boolean(previousSnapshot.hidden || previousSnapshot.visible === false);
+  }
+
+  if (mutationKind === "attribute") {
+    return isVisible(element);
+  }
+
+  return mutationKind !== "insert" && !isVisible(element);
+}
+
+function looksLikeSuddenlyAvailableAction(element) {
+  if (!(element instanceof HTMLElement) || !isVisible(element) || !isClickableElement(element)) {
+    return false;
+  }
+
+  const text = normalizeText(element.innerText || element.textContent || "");
+  if (text.length < 3 || text.length > 80) {
+    return false;
+  }
+
+  if (isObviousNavChrome(element, text) || isIgnoredText(text, getActiveProfile())) {
+    return false;
+  }
+
+  return true;
+}
+
+function isObviousNavChrome(element, text = "") {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (element.closest("nav, header, [role='navigation'], [aria-label*='nav' i], [class*='nav'], [class*='menu'], [id*='nav'], [id*='menu']")) {
+    return true;
+  }
+
+  const normalized = text.toLowerCase();
+  return /^(home|back|next|previous|menu|search|profile|settings|help|log in|sign in)$/i.test(normalized);
+}
+
+function getElementStateSnapshot(element) {
+  if (!(element instanceof HTMLElement)) {
+    return null;
+  }
+
+  const text = normalizeText(element.innerText || element.textContent || "");
+  const visible = isVisible(element);
+  const clickable = isClickableElement(element);
+  const disabled = isElementDisabled(element);
+  const hidden = !visible || hasHiddenAttributes(element);
+
+  return {
+    text,
+    visible,
+    clickable,
+    disabled,
+    hidden
+  };
+}
+
+function getClosestCandidateSnapshot(element) {
+  let current = element instanceof HTMLElement ? element : null;
+  for (let depth = 0; current && depth < 3; depth += 1) {
+    const snapshot = candidateStateSnapshots.get(current);
+    if (snapshot) {
+      return snapshot;
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
+}
+
+function updateCandidateStateSnapshot(element) {
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+
+  candidateStateSnapshots.set(element, getElementStateSnapshot(element));
+}
+
+function getAvailabilityState(element, previousSnapshot, mutationKind = "text") {
+  const currentSnapshot = getElementStateSnapshot(element);
+  const hiddenBefore = wasElementHiddenBefore(element, previousSnapshot, mutationKind);
+  const becameVisible = Boolean(currentSnapshot?.visible && hiddenBefore);
+  const becameEnabled = Boolean(previousSnapshot?.disabled && !currentSnapshot?.disabled);
+  const becameClickable = Boolean(previousSnapshot && !previousSnapshot.clickable && currentSnapshot?.clickable);
+
+  return {
+    previousSnapshot,
+    currentSnapshot,
+    becameVisible,
+    becameEnabled,
+    becameClickable,
+    becameAvailable: becameVisible || becameEnabled || becameClickable
+  };
 }
 
 function isIgnoredText(text, profile = getActiveProfile()) {
@@ -1342,7 +1546,11 @@ function getBestTriggerNode(node) {
     }
 
     const textLength = normalizeText(descendant.innerText || descendant.textContent || "").length;
-    if (textLength >= 4 && textLength < bestTextLength) {
+    if (looksLikeSuddenlyAvailableAction(descendant)) {
+      return descendant;
+    }
+
+    if (((isClickableElement(descendant) && textLength >= 3) || textLength >= 4) && textLength < bestTextLength) {
       best = descendant;
       bestTextLength = textLength;
     }
@@ -1401,6 +1609,53 @@ function debugDomCandidates(reason, candidateLogs, best) {
     reason,
     best,
     candidates: candidateLogs.slice(0, 5)
+  });
+}
+
+function debugSuddenlyAvailableAction(mutationKind, element, previousSnapshot, currentSnapshot, availabilityState, accepted, candidate) {
+  if (!DEBUG_DOM_CANDIDATES || mutationKind !== "attribute") {
+    return;
+  }
+
+  console.debug("Revere sudden action candidate", {
+    mutationKind,
+    text: normalizeText(element?.innerText || element?.textContent || ""),
+    before: previousSnapshot
+      ? {
+          visible: previousSnapshot.visible,
+          clickable: previousSnapshot.clickable,
+          disabled: previousSnapshot.disabled,
+          hidden: previousSnapshot.hidden
+        }
+      : null,
+    after: currentSnapshot
+      ? {
+          visible: currentSnapshot.visible,
+          clickable: currentSnapshot.clickable,
+          disabled: currentSnapshot.disabled,
+          hidden: currentSnapshot.hidden
+        }
+      : null,
+    availabilityBoosted: availabilityState?.becameAvailable,
+    accepted,
+    winningCandidate: candidate ? { summary: candidate.summary, score: candidate.score } : null
+  });
+}
+
+function debugSuddenlyAvailableWinner(candidate) {
+  if (!DEBUG_DOM_CANDIDATES || candidate?.mutationKind !== "attribute") {
+    return;
+  }
+
+  console.debug("Revere sudden action winner", {
+    mutationKind: candidate.mutationKind,
+    text: candidate.triggerSummary,
+    availabilityBoosted: candidate.availabilityBoosted,
+    winningCandidate: {
+      summary: candidate.summary,
+      score: candidate.score,
+      source: candidate.source
+    }
   });
 }
 
