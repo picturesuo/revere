@@ -1,18 +1,18 @@
 # Revere
 
-Revere is a Chrome extension for monitoring live website changes and sending a phone alert within seconds. It is designed for pages that update while you are logged in or already watching the tab, including sports feeds, breaking news pages, marketplaces, and other live dashboards.
-
+Revere is a Chrome extension that monitors website changes live by sending a push notification to your phone within seconds. It's designed for pages that update while you're already logged in or watching the tab, which includes:
+- Sports Feeds
+- Breaking News Pages
+- Marketplaces
+- other live dashboards (like college attendance websites).
+ 
 ![Revere artwork](assets/paul-revere-ride.png)
-
-## Why This Matters
-
-Many useful pages update in the browser before any public API or email alert catches up. Revere focuses on that gap: it watches the page you already have open and surfaces meaningful updates quickly enough to matter.
 
 ## What It Does
 
 - Monitors open tabs for meaningful visible changes
 - Detects live DOM updates, websocket-driven updates, and event-stream activity
-- Sends alerts through a local bridge to services like `ntfy`, Telegram, or WhatsApp
+- Sends alerts through a local bridge to services like `ntfy`
 - Works well for logged-in pages and other sites where browser context matters
 
 ## Why Chrome Extension
@@ -32,7 +32,7 @@ The script runs inside the watched page and uses:
 - Chrome Extension APIs
 - JavaScript
 - Node.js for the optional local bridge
-- `ntfy`, Telegram, or WhatsApp for alert delivery
+- `ntfy`
 
 ## How To Run
 
@@ -56,8 +56,7 @@ npm run bridge
 5. Keep the tab open.
 6. You can work in other apps or other websites, and as long as the watched tab stays open with tracking enabled, you will keep getting live alerts.
 
-## What I Learned
+## Learnings
 
-- Browser extensions are a practical way to monitor pages that are hard to cover through APIs alone.
-- Live-update detection is more reliable when multiple signals are combined instead of relying on one source.
-- Fast public-facing documentation matters because it changes how a project is perceived before anyone reads the code.
+This is the first product that I had to test in real time, and it failed the first two times when I was trying to track a live attendance website. Then I learned every website is different, and some are much harder to track than others. Hence I added the three-layer checker, although I hypothesize that there will need to be more layers to check.
+
