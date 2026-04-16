@@ -60,3 +60,8 @@ npm run bridge
 
 This is the first product that I had to test in real time, and it failed the first two times when I was trying to track a live attendance website. Then I learned every website is different, and some are much harder to track than others. Hence I added the three-layer checker, although I hypothesize that there will need to be more layers to check.
 
+## Task Artifact
+
+- Current task: Initialize the first real task artifact.
+- Artifact ID: `README.md`
+- Status: complete
