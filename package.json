@@ -1,5 +1,5 @@
 {
-  "name": "website-updater",
+  "name": "revere",
   "version": "0.1.0",
   "private": true,
   "description": "Chrome extension plus optional webhook bridge for live website update alerts.",

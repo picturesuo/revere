@@ -139,19 +139,32 @@
         border: 1px solid var(--line);
       }
 
-      .item-top {
+      .watch-card,
+      .event-card,
+      .step-card,
+      .detail-row {
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+      }
+
+      .watch-top,
+      .event-top {
         display: flex;
         justify-content: space-between;
         gap: 10px;
         align-items: flex-start;
       }
 
-      .title {
+      .watch-title,
+      .event-title {
         font-size: 14px;
         font-weight: 700;
       }
 
-      .meta {
+      .watch-meta,
+      .event-meta {
         margin-top: 5px;
         color: var(--muted);
         font-size: 12px;
@@ -235,6 +248,23 @@
         margin-top: 12px;
         color: var(--muted);
         font-size: 13px;
+      }
+
+      .detail-label {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .detail-value {
+        display: block;
+        margin-top: 6px;
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--text);
+        word-break: break-word;
       }
 
       @media (max-width: 900px) {

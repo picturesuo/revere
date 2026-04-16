@@ -11,9 +11,6 @@ const watchListEl = document.getElementById("watch-list");
 const eventListEl = document.getElementById("event-list");
 const watchDetailEl = document.getElementById("watch-detail");
 const stepsEl = document.getElementById("steps");
-const heroPhoneEl = document.getElementById("hero-phone");
-const heroWebhookEl = document.getElementById("hero-webhook");
-const heroOnboardingEl = document.getElementById("hero-onboarding");
 const statWatchesEl = document.getElementById("stat-watches");
 const statEventsEl = document.getElementById("stat-events");
 const statLastEl = document.getElementById("stat-last");
@@ -39,9 +36,11 @@ async function init() {
 }
 
 async function refreshDashboard() {
-  dashboardState = await chrome.runtime.sendMessage({
+  const response = await chrome.runtime.sendMessage({
     type: "get-dashboard-data"
   });
+  assertOk(response);
+  dashboardState = response;
 
   const { watches = [], recentEvents = [], settings = {}, onboarding = {} } = dashboardState;
 
@@ -49,10 +48,6 @@ async function refreshDashboard() {
   statEventsEl.textContent = String(recentEvents.length);
   statLastEl.textContent = recentEvents[0] ? formatRelativeTime(recentEvents[0].timestamp) : "None";
   statDestinationsEl.textContent = formatDestinations(settings);
-
-  heroPhoneEl.textContent = settings.subscriptionName ? "Phone Push On" : "Phone Push Off";
-  heroWebhookEl.textContent = settings.webhookUrl ? "Webhook Ready" : "Bridge Idle";
-  heroOnboardingEl.textContent = onboarding.phonePushReady && onboarding.hasWatch ? "Setup Live" : "Setup In Progress";
 
   renderWatches(watches, recentEvents);
   renderEvents(recentEvents);
@@ -83,9 +78,11 @@ async function saveSettings() {
 
   try {
     validateSettings({ webhookUrl, ntfyServer, subscriptionName });
+    const { [SETTINGS_KEY]: existingSettings = {} } = await chrome.storage.local.get(SETTINGS_KEY);
 
     await chrome.storage.local.set({
       [SETTINGS_KEY]: {
+        ...existingSettings,
         webhookUrl,
         ntfyServer,
         subscriptionName,
@@ -111,10 +108,11 @@ async function sendTestNotification() {
   messageEl.textContent = "Sending test...";
 
   try {
-    await chrome.runtime.sendMessage({
+    const response = await chrome.runtime.sendMessage({
       type: "send-test-event",
       url: "https://example.com"
     });
+    assertOk(response);
     messageEl.textContent = "Test notification sent.";
     await refreshDashboard();
   } catch (error) {
@@ -350,4 +348,12 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function assertOk(response) {
+  if (!response || response.ok === false) {
+    throw new Error(response?.error || "Dashboard request failed.");
+  }
+
+  return response;
 }

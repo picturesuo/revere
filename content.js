@@ -3,7 +3,9 @@ const FAST_FLUSH_DELAY_MS = 250;
 const EVENT_COOLDOWN_MS = 5000;
 const NETWORK_EVENT_COOLDOWN_MS = 3000;
 const PRICE_SCAN_INTERVAL_MS = 2000;
-const SNAPSHOT_SCAN_INTERVAL_MS = 4000;
+const SCREENSHOT_SCAN_INTERVAL_MS = 1000;
+const SCREEN_SCAN_INTERVAL_MS = 5000;
+const SCREEN_SCAN_DEBOUNCE_MS = 150;
 const MAX_CANDIDATES = 20;
 const MAX_SNAPSHOT_BLOCKS = 12;
 const INJECTED_EVENT_NAME = "revere-network-message";
@@ -31,9 +33,27 @@ const SNAPSHOT_SELECTORS = [
   "h2",
   "h3"
 ].join(", ");
+const TRANSIENT_UI_SELECTORS = [
+  "[role='dialog']",
+  "[role='alert']",
+  "[role='status']",
+  "[role='tooltip']",
+  "[aria-live]",
+  "[class*='toast']",
+  "[class*='banner']",
+  "[class*='popup']",
+  "[class*='modal']",
+  "[class*='sheet']",
+  "[class*='drawer']",
+  "[class*='snackbar']",
+  "[class*='notice']",
+  "[class*='prompt']",
+  "[class*='overlay']",
+  "[class*='callout']"
+].join(", ");
 const CARD_CLASS_PATTERN = /(card|item|tile|product|listing|drop|grid|row|score|matchup|game|price|ticker|quote|question|answer|comment|post|message|thread|discussion)/;
-const IGNORE_CLASS_PATTERN = /(countdown|timer|carousel|slider|ticker|marquee|toast|modal)/;
-const IGNORE_ID_PATTERN = /(countdown|timer|toast|modal)/;
+const IGNORE_CLASS_PATTERN = /(countdown|timer|carousel|slider|ticker|marquee)/;
+const IGNORE_ID_PATTERN = /(countdown|timer)/;
 const LOADING_TEXT_PATTERN = /^(loading|please wait|updated just now|just now)$/i;
 const SIMPLE_CLOCK_PATTERN = /^\d{1,2}:\d{2}(?::\d{2})?$/;
 const PRICE_KEYWORDS = ["price", "ticker", "quote"];
@@ -84,9 +104,16 @@ const candidateStateSnapshots = new WeakMap();
 
 let flushTimer = null;
 let domObserver = null;
+let resizeObserver = null;
+let screenScanDebounceId = null;
+let screenScanIntervalId = null;
+let screenshotScanIntervalId = null;
+let screenshotScanInFlight = false;
 let snapshotIntervalId = null;
 let cryptoIntervalId = null;
 let startupSnapshotTimeoutId = null;
+let startupScreenshotTimeoutId = null;
+let startupScreenTimeoutId = null;
 let startupPriceTimeoutId = null;
 let extensionActive = true;
 let lastSentAt = 0;
@@ -115,12 +142,15 @@ function boot() {
     }
 
     startDomObserver();
-    snapshotIntervalId = window.setInterval(scanSnapshotSignals, SNAPSHOT_SCAN_INTERVAL_MS);
-    startupSnapshotTimeoutId = window.setTimeout(scanSnapshotSignals, 2500);
-    window.addEventListener("focus", scanSnapshotSignals);
+    startScreenObservers();
+    screenshotScanIntervalId = window.setInterval(scanScreenshotSignals, SCREENSHOT_SCAN_INTERVAL_MS);
+    startupScreenshotTimeoutId = window.setTimeout(scanScreenshotSignals, 1000);
+    screenScanIntervalId = window.setInterval(scanScreenSignals, SCREEN_SCAN_INTERVAL_MS);
+    startupScreenTimeoutId = window.setTimeout(scanScreenSignals, 2500);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
-        scanSnapshotSignals();
+        scheduleScreenshotScan();
+        scheduleScreenScan();
       }
     });
 
@@ -165,8 +195,69 @@ function startDomObserver() {
     subtree: true,
     characterData: true,
     attributes: true,
-    attributeFilter: ["class", "style", "hidden", "aria-hidden", "disabled"]
+    attributeFilter: [
+      "class",
+      "style",
+      "hidden",
+      "aria-hidden",
+      "disabled",
+      "aria-expanded",
+      "aria-modal",
+      "aria-live",
+      "open",
+      "data-state",
+      "data-visible",
+      "data-open",
+      "data-show"
+    ]
   });
+}
+
+function startScreenObservers() {
+  if (!extensionActive) {
+    return;
+  }
+
+  const scheduleOnChange = () => scheduleScreenScan();
+
+  window.addEventListener("resize", scheduleOnChange);
+  window.addEventListener("scroll", scheduleOnChange, true);
+  window.addEventListener("hashchange", scheduleOnChange);
+  window.addEventListener("focus", scheduleOnChange);
+  window.addEventListener("focus", scheduleScreenshotScan);
+  document.addEventListener("focusin", scheduleOnChange, true);
+  document.addEventListener("pointerup", scheduleOnChange, true);
+  document.addEventListener("click", scheduleOnChange, true);
+  document.addEventListener("transitionend", scheduleOnChange, true);
+  document.addEventListener("animationend", scheduleOnChange, true);
+  document.addEventListener("animationstart", scheduleOnChange, true);
+
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(scheduleOnChange);
+    if (document.documentElement) {
+      resizeObserver.observe(document.documentElement);
+    }
+    if (document.body) {
+      resizeObserver.observe(document.body);
+    }
+  }
+}
+
+function scheduleScreenScan() {
+  if (!extensionActive) {
+    return;
+  }
+
+  clearTimeout(screenScanDebounceId);
+  screenScanDebounceId = window.setTimeout(scanScreenSignals, SCREEN_SCAN_DEBOUNCE_MS);
+}
+
+function scheduleScreenshotScan() {
+  if (!extensionActive) {
+    return;
+  }
+
+  window.setTimeout(scanScreenshotSignals, 0);
 }
 
 function injectPageHook() {
@@ -258,11 +349,15 @@ function scanPriceSignals() {
 }
 
 function scanSnapshotSignals() {
+  scanScreenSignals();
+}
+
+function scanScreenSignals() {
   if (!extensionActive) {
     return;
   }
 
-  const candidate = buildSnapshotCandidate();
+  const candidate = buildScreenCandidate();
   if (!candidate) {
     return;
   }
@@ -273,7 +368,34 @@ function scanSnapshotSignals() {
   }
 
   lastSentAt = now;
-  sendEvent(candidate.summary, candidate.fingerprint, candidate.score, getActiveProfile().name, "snapshot");
+  sendEvent(candidate.summary, candidate.fingerprint, candidate.score, candidate.profile, candidate.source);
+}
+
+async function scanScreenshotSignals() {
+  if (!extensionActive || document.visibilityState !== "visible") {
+    return;
+  }
+
+  if (screenshotScanInFlight) {
+    return;
+  }
+
+  screenshotScanInFlight = true;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "capture-visible-screenshot",
+      url: location.href,
+      title: document.title || ""
+    });
+
+    if (!response?.ok && response?.error) {
+      return;
+    }
+  } catch (error) {
+    handleExtensionContextInvalidated(error);
+  } finally {
+    screenshotScanInFlight = false;
+  }
 }
 
 function buildPriceCandidate() {
@@ -306,8 +428,12 @@ function buildPriceCandidate() {
 }
 
 function buildSnapshotCandidate() {
+  return buildScreenCandidate();
+}
+
+function buildScreenCandidate() {
   const activeProfile = getActiveProfile();
-  const blocks = collectSnapshotBlocks(activeProfile);
+  const blocks = collectScreenBlocks(activeProfile);
   if (!blocks.length) {
     return null;
   }
@@ -336,29 +462,41 @@ function buildSnapshotCandidate() {
   return {
     summary: `${summaryPrefix}: ${clip(changedBlock)}`,
     fingerprint: `${location.hostname}:snapshot:${fingerprint}`,
-    score: Math.max(activeProfile.minScore, 8)
+    score: Math.max(activeProfile.minScore, 8),
+    profile: activeProfile.name,
+    source: "screen"
   };
 }
 
-function collectSnapshotBlocks(activeProfile) {
+function collectScreenBlocks(activeProfile) {
   const blocks = [];
   const seen = new Set();
   const snapshotSelectors =
     activeProfile.name === "learning"
-      ? `${SNAPSHOT_SELECTORS}, div, span`
+      ? `${SNAPSHOT_SELECTORS}, div, span, ${TRANSIENT_UI_SELECTORS}`
       : activeProfile.name === "live_feed"
-        ? `${SNAPSHOT_SELECTORS}, div`
-        : SNAPSHOT_SELECTORS;
+        ? `${SNAPSHOT_SELECTORS}, div, ${TRANSIENT_UI_SELECTORS}`
+        : `${SNAPSHOT_SELECTORS}, ${TRANSIENT_UI_SELECTORS}`;
 
   pushUniqueText(blocks, seen, document.title, (text) => isSnapshotWorthy(text, activeProfile));
   collectVisibleTexts(
     snapshotSelectors,
     MAX_SNAPSHOT_BLOCKS - blocks.length,
-    (text) => isSnapshotWorthy(text, activeProfile),
+    (text, element) => isScreenWorthy(text, element, activeProfile),
     seen,
     blocks,
     (text) => text
   );
+
+  collectVisibleTexts(
+    TRANSIENT_UI_SELECTORS,
+    Math.max(4, MAX_SNAPSHOT_BLOCKS - blocks.length),
+    (text, element) => isTransientPopupText(text, element, activeProfile),
+    seen,
+    blocks,
+    (text, element) => `${normalizeElementLabel(element)} ${text}`.trim()
+  );
+
   return blocks;
 }
 
@@ -385,6 +523,89 @@ function isSnapshotWorthy(text, profile = getActiveProfile()) {
   }
 
   return !LOADING_TEXT_PATTERN.test(text);
+}
+
+function isScreenWorthy(text, element, profile = getActiveProfile()) {
+  if (!isSnapshotWorthy(text, profile)) {
+    return false;
+  }
+
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  return looksLikePopupSurface(element) || looksLikeTransientOverlay(element) || isLikelyVisibleChangeTarget(element);
+}
+
+function isTransientPopupText(text, element, profile = getActiveProfile()) {
+  if (!(element instanceof HTMLElement) || !text) {
+    return false;
+  }
+
+  const normalized = text.toLowerCase();
+  if (normalized.length < 3 || normalized.length > 160) {
+    return false;
+  }
+
+  if (isIgnoredText(text, profile)) {
+    return false;
+  }
+
+  return looksLikePopupSurface(element) || looksLikeTransientOverlay(element) || isLikelyVisibleChangeTarget(element);
+}
+
+function looksLikePopupSurface(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  const role = (element.getAttribute("role") || "").toLowerCase();
+  const className = (element.className || "").toString().toLowerCase();
+  return (
+    role === "dialog" ||
+    role === "alert" ||
+    role === "status" ||
+    role === "tooltip" ||
+    /(?:toast|banner|popup|modal|sheet|drawer|snackbar|notice|prompt|overlay|callout|pill|chip|alert)/.test(className)
+  );
+}
+
+function looksLikeTransientOverlay(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(element);
+  return style.position === "fixed" || style.position === "sticky";
+}
+
+function isLikelyVisibleChangeTarget(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  const ariaLive = (element.getAttribute("aria-live") || "").toLowerCase();
+  const text = normalizeText(element.innerText || element.textContent || "");
+  return Boolean(ariaLive) || (isClickableElement(element) && text.length >= 3 && text.length <= 120);
+}
+
+function normalizeElementLabel(element) {
+  if (!(element instanceof HTMLElement)) {
+    return "";
+  }
+
+  const ariaLabel = normalizeText(element.getAttribute("aria-label") || "");
+  if (ariaLabel) {
+    return ariaLabel;
+  }
+
+  const role = normalizeText(element.getAttribute("role") || "");
+  if (role) {
+    return role;
+  }
+
+  const className = normalizeText((element.className || "").toString().replace(/\s+/g, " "));
+  return className.slice(0, 40);
 }
 
 function collectPriceSamples() {
@@ -1681,14 +1902,33 @@ function shutdownContentScript() {
   clearTimeout(flushTimer);
   flushTimer = null;
 
+  clearTimeout(screenScanDebounceId);
+  screenScanDebounceId = null;
+  screenshotScanInFlight = false;
+
   if (domObserver) {
     domObserver.disconnect();
     domObserver = null;
   }
 
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  }
+
   if (snapshotIntervalId) {
     clearInterval(snapshotIntervalId);
     snapshotIntervalId = null;
+  }
+
+  if (screenScanIntervalId) {
+    clearInterval(screenScanIntervalId);
+    screenScanIntervalId = null;
+  }
+
+  if (screenshotScanIntervalId) {
+    clearInterval(screenshotScanIntervalId);
+    screenshotScanIntervalId = null;
   }
 
   if (cryptoIntervalId) {
@@ -1699,6 +1939,16 @@ function shutdownContentScript() {
   if (startupSnapshotTimeoutId) {
     clearTimeout(startupSnapshotTimeoutId);
     startupSnapshotTimeoutId = null;
+  }
+
+  if (startupScreenTimeoutId) {
+    clearTimeout(startupScreenTimeoutId);
+    startupScreenTimeoutId = null;
+  }
+
+  if (startupScreenshotTimeoutId) {
+    clearTimeout(startupScreenshotTimeoutId);
+    startupScreenshotTimeoutId = null;
   }
 
   if (startupPriceTimeoutId) {

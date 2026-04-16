@@ -1,6 +1,6 @@
 (function () {
   const eventName =
-    document.currentScript?.dataset?.eventName || "website-updater-network-message";
+    document.currentScript?.dataset?.eventName || "revere-network-message";
 
   hookWebSocket(eventName);
   hookEventSource(eventName);
