@@ -46,6 +46,8 @@ async function handleMessage(message, sender) {
       return getPopupState(message.tabId);
     case "get-dashboard-data":
       return getDashboardData(message.tabId);
+    case "get-content-state":
+      return getContentState(sender);
     case "set-tab-monitoring":
       await setTabMonitoring(message.tabId, message.url, message.enabled, {
         name: message.name,
@@ -59,8 +61,7 @@ async function handleMessage(message, sender) {
       await saveNtfyDefaults(message.ntfyTitleTemplate, message.ntfyMessageTemplate);
       return getPopupState(message.tabId);
     case "send-test-event":
-      await sendTestEvent(message.tabId, message.url);
-      return { delivered: true };
+      return sendTestEvent(message.tabId, message.url);
     case "page-update":
       await handlePageUpdate(message.payload, sender);
       return {};
@@ -108,6 +109,20 @@ async function getDashboardData(tabId) {
       phonePushReady: Boolean(settings.subscriptionName || settings.webhookUrl),
       hasWatch: watches.length > 0
     }
+  };
+}
+
+async function getContentState(sender) {
+  const tabId = sender.tab?.id;
+  if (!tabId) {
+    return { tabId: null, watched: false };
+  }
+
+  const watchedTabs = await getStoredObject(WATCHED_TABS_KEY);
+  return {
+    tabId,
+    watched: Boolean(watchedTabs[String(tabId)]),
+    watch: watchedTabs[String(tabId)] || null
   };
 }
 
@@ -173,7 +188,12 @@ async function sendTestEvent(tabId, url) {
       timestamp: new Date().toISOString()
     }),
     timestamp: new Date().toISOString()
-  });
+  }, settings, { strictDelivery: true });
+
+  return {
+    delivered: true,
+    phoneConfigured: Boolean(settings.subscriptionName || settings.webhookUrl)
+  };
 }
 
 async function handlePageUpdate(payload, sender) {
@@ -267,8 +287,7 @@ async function handleVisibleScreenshotRequest(message, sender) {
   if (
     diff.changedRatio < SCREENSHOT_DIFF_RATIO_THRESHOLD ||
     diff.bboxRatio < SCREENSHOT_BBOX_RATIO_THRESHOLD ||
-    diff.bboxWidthRatio < SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD ||
-    diff.bboxHeightRatio < SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD
+    isThinEdgeStrip(diff, currentSample.width, currentSample.height)
   ) {
     return {
       captured: true,
@@ -309,7 +328,7 @@ async function handleVisibleScreenshotRequest(message, sender) {
   };
 }
 
-async function dispatchEvent(event, providedSettings) {
+async function dispatchEvent(event, providedSettings, options = {}) {
   const settings = providedSettings || (await getSettings());
 
   await appendEvent(event);
@@ -336,6 +355,9 @@ async function dispatchEvent(event, providedSettings) {
     try {
       await postNtfy(settings, event);
     } catch (error) {
+      if (options.strictDelivery) {
+        throw error;
+      }
       console.error("ntfy delivery failed:", error);
     }
   }
@@ -344,6 +366,9 @@ async function dispatchEvent(event, providedSettings) {
     try {
       await postWebhook(settings.webhookUrl, event);
     } catch (error) {
+      if (options.strictDelivery) {
+        throw error;
+      }
       console.error("Webhook delivery failed:", error);
     }
   }
@@ -459,8 +484,24 @@ function compareScreenshotSamples(previous, current) {
     bboxRatio,
     bboxWidthRatio,
     bboxHeightRatio,
+    minX,
+    minY,
+    maxX,
+    maxY,
     signature
   };
+}
+
+function isThinEdgeStrip(diff, width, height) {
+  const leftEdge = diff.minX <= Math.floor(width * SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD);
+  const rightEdge = diff.maxX >= width - 1 - Math.floor(width * SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD);
+  const topEdge = diff.minY <= Math.floor(height * SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD);
+  const bottomEdge = diff.maxY >= height - 1 - Math.floor(height * SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD);
+
+  const thinVerticalStrip = diff.bboxWidthRatio < SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD && (leftEdge || rightEdge);
+  const thinHorizontalStrip = diff.bboxHeightRatio < SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD && (topEdge || bottomEdge);
+
+  return thinVerticalStrip || thinHorizontalStrip;
 }
 
 async function postWebhook(webhookUrl, event) {

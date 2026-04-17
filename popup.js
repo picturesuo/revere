@@ -102,6 +102,10 @@ testButton.addEventListener("click", async () => {
     assertOk(response);
 
     await refreshState();
+    if (response.phoneConfigured === false) {
+      monitorBadgeEl.textContent = "Desktop only";
+      monitorBadgeEl.classList.remove("live");
+    }
   } catch (error) {
     monitorBadgeEl.textContent = error instanceof Error ? error.message : String(error);
   } finally {
@@ -133,7 +137,9 @@ saveNtfyCopyButton.addEventListener("click", async () => {
 });
 
 optionsButton.addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
+  chrome.tabs.create({
+    url: chrome.runtime.getURL("options.html")
+  });
 });
 
 function render(dashboard) {

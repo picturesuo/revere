@@ -3,7 +3,9 @@ const FAST_FLUSH_DELAY_MS = 250;
 const EVENT_COOLDOWN_MS = 5000;
 const NETWORK_EVENT_COOLDOWN_MS = 3000;
 const PRICE_SCAN_INTERVAL_MS = 2000;
-const SCREENSHOT_SCAN_INTERVAL_MS = 1000;
+const SCREENSHOT_SCAN_INTERVAL_MS = 2500;
+const AUTO_REFRESH_INTERVAL_MS = 5000;
+const PAGE_VISUAL_STABILIZATION_MS = 1500;
 const SCREEN_SCAN_INTERVAL_MS = 5000;
 const SCREEN_SCAN_DEBOUNCE_MS = 150;
 const MAX_CANDIDATES = 20;
@@ -115,6 +117,10 @@ let startupSnapshotTimeoutId = null;
 let startupScreenshotTimeoutId = null;
 let startupScreenTimeoutId = null;
 let startupPriceTimeoutId = null;
+let autoRefreshIntervalId = null;
+let currentTabId = null;
+let currentWatch = null;
+let pageVisualReadyAt = 0;
 let extensionActive = true;
 let lastSentAt = 0;
 let lastNetworkSentAt = 0;
@@ -141,10 +147,11 @@ function boot() {
       return;
     }
 
+    initializeAutoRefresh();
     startDomObserver();
     startScreenObservers();
     screenshotScanIntervalId = window.setInterval(scanScreenshotSignals, SCREENSHOT_SCAN_INTERVAL_MS);
-    startupScreenshotTimeoutId = window.setTimeout(scanScreenshotSignals, 1000);
+    startupScreenshotTimeoutId = window.setTimeout(scanScreenshotSignals, 2500);
     screenScanIntervalId = window.setInterval(scanScreenSignals, SCREEN_SCAN_INTERVAL_MS);
     startupScreenTimeoutId = window.setTimeout(scanScreenSignals, 2500);
     document.addEventListener("visibilitychange", () => {
@@ -159,6 +166,14 @@ function boot() {
       startupPriceTimeoutId = window.setTimeout(scanPriceSignals, 1500);
     }
   });
+
+  if (document.readyState === "complete") {
+    markPageVisualReady();
+  } else {
+    window.addEventListener("load", markPageVisualReady, { once: true });
+  }
+
+  chrome.storage.onChanged.addListener(handleStorageChange);
 }
 
 function startDomObserver() {
@@ -258,6 +273,72 @@ function scheduleScreenshotScan() {
   }
 
   window.setTimeout(scanScreenshotSignals, 0);
+}
+
+async function initializeAutoRefresh() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "get-content-state" });
+    if (!response?.tabId) {
+      return;
+    }
+
+    currentTabId = response.tabId;
+    currentWatch = response.watch || null;
+    syncAutoRefresh(Boolean(response.watched));
+  } catch (error) {
+    handleExtensionContextInvalidated(error);
+  }
+}
+
+function handleStorageChange(changes, areaName) {
+  if (!extensionActive || areaName !== "local" || !changes.watchedTabs || !currentTabId) {
+    return;
+  }
+
+  const watchedTabs = changes.watchedTabs.newValue || {};
+  currentWatch = watchedTabs[String(currentTabId)] || null;
+  syncAutoRefresh(Boolean(currentWatch));
+}
+
+function syncAutoRefresh(enabled) {
+  if (!extensionActive) {
+    return;
+  }
+
+  if (!enabled || !currentWatch) {
+    if (autoRefreshIntervalId) {
+      clearInterval(autoRefreshIntervalId);
+      autoRefreshIntervalId = null;
+    }
+    return;
+  }
+
+  if (!autoRefreshIntervalId) {
+    autoRefreshIntervalId = window.setInterval(tryAutoRefreshPage, AUTO_REFRESH_INTERVAL_MS);
+  }
+}
+
+function tryAutoRefreshPage() {
+  if (
+    !extensionActive ||
+    !currentWatch ||
+    document.visibilityState !== "visible" ||
+    !document.hasFocus() ||
+    document.readyState !== "complete" ||
+    Date.now() < pageVisualReadyAt
+  ) {
+    return;
+  }
+
+  try {
+    location.reload();
+  } catch (error) {
+    handleExtensionContextInvalidated(error);
+  }
+}
+
+function markPageVisualReady() {
+  pageVisualReadyAt = Date.now() + PAGE_VISUAL_STABILIZATION_MS;
 }
 
 function injectPageHook() {
@@ -373,6 +454,10 @@ function scanScreenSignals() {
 
 async function scanScreenshotSignals() {
   if (!extensionActive || document.visibilityState !== "visible") {
+    return;
+  }
+
+  if (document.readyState !== "complete" || Date.now() < pageVisualReadyAt) {
     return;
   }
 
@@ -1954,6 +2039,11 @@ function shutdownContentScript() {
   if (startupPriceTimeoutId) {
     clearTimeout(startupPriceTimeoutId);
     startupPriceTimeoutId = null;
+  }
+
+  if (autoRefreshIntervalId) {
+    clearInterval(autoRefreshIntervalId);
+    autoRefreshIntervalId = null;
   }
 
   pendingNodes.clear();

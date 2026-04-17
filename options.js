@@ -113,7 +113,9 @@ async function sendTestNotification() {
       url: "https://example.com"
     });
     assertOk(response);
-    messageEl.textContent = "Test notification sent.";
+    messageEl.textContent = response.phoneConfigured
+      ? "Test notification sent."
+      : "Test sent locally only. Add an ntfy topic or webhook for phone pushes.";
     await refreshDashboard();
   } catch (error) {
     messageEl.textContent = error instanceof Error ? error.message : String(error);
