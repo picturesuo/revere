@@ -27,3 +27,5 @@ Keep it current.
 - Publish only verified completed work.
 - Use a local-only commit only when it is intentional.
 - Do not auto-publish partial, failing, or unverified work.
+- After each individual file is changed and verified, commit and push that file before editing the next file.
+- Prefer many small pushed commits over batching multiple changed files into one commit, unless the user explicitly asks for a batch.
