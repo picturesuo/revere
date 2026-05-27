@@ -5,6 +5,6 @@
   "description": "Chrome extension plus optional webhook bridge for live website update alerts.",
   "scripts": {
     "bridge": "node bridge-server.js",
-    "check": "node --check background.js && node --check content.js && node --check popup.js && node --check options.js && node --check bridge-server.js"
+    "check": "node --check background.js && node --check content.js && node --check popup.js && node --check options.js && node --check bridge-server.js && node scripts/verify-extension-logic.mjs"
   }
 }

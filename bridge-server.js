@@ -1,7 +1,23 @@
 const http = require("http");
+const fs = require("fs/promises");
+const os = require("os");
+const path = require("path");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 
 const PORT = Number(process.env.PORT || 8787);
 const MODE = process.env.BRIDGE_MODE || "log";
+const execFileAsync = promisify(execFile);
+const SCREEN_SAMPLE_WIDTH = 128;
+const SCREEN_SAMPLE_HEIGHT = 72;
+const SCREEN_PIXEL_DIFF_THRESHOLD = 24;
+const SCREEN_DIFF_RATIO_THRESHOLD = 0.012;
+const SCREEN_BBOX_RATIO_THRESHOLD = 0.025;
+const SCREEN_BBOX_EDGE_RATIO_THRESHOLD = 0.02;
+const SCREEN_WATCH_DEFAULT_INTERVAL_MS = 5000;
+const SCREEN_WATCH_MIN_INTERVAL_MS = 2000;
+const SCREEN_WATCH_MAX_INTERVAL_MS = 60000;
+const SCREEN_WATCH_EVENT_COOLDOWN_MS = 15000;
 const SENDERS = {
   log: async (event) => console.log(formatEvent(event)),
   twilio_whatsapp: sendViaTwilio,
@@ -9,10 +25,24 @@ const SENDERS = {
   ntfy: sendViaNtfy,
   telegram: sendViaTelegram
 };
+const screenWatchState = {
+  timer: null,
+  inFlight: false,
+  previousSample: null,
+  intervalMs: SCREEN_WATCH_DEFAULT_INTERVAL_MS,
+  lastScanAt: 0,
+  lastEventAt: 0,
+  label: "Desktop"
+};
 
 const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/health") {
-    writeJson(res, 200, { ok: true, mode: MODE });
+    writeJson(res, 200, { ok: true, mode: MODE, screenWatch: screenWatchStatus() });
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/screen-watch") {
+    writeJson(res, 200, { ok: true, screenWatch: screenWatchStatus() });
     return;
   }
 
@@ -24,6 +54,34 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       writeJson(res, 500, { ok: false, error: error.message });
     }
+    return;
+  }
+
+  if (req.method === "POST" && (req.url === "/agent" || req.url === "/agent-attention")) {
+    try {
+      const payload = await readJson(req);
+      await dispatchEvent(buildAgentAttentionEvent(payload));
+      writeJson(res, 200, { ok: true });
+    } catch (error) {
+      writeJson(res, 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/screen-watch/start") {
+    try {
+      const payload = await readJson(req);
+      await startScreenWatch(payload);
+      writeJson(res, 200, { ok: true, screenWatch: screenWatchStatus() });
+    } catch (error) {
+      writeJson(res, 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/screen-watch/stop") {
+    stopScreenWatch();
+    writeJson(res, 200, { ok: true, screenWatch: screenWatchStatus() });
     return;
   }
 
@@ -45,6 +103,14 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Revere bridge listening on http://localhost:${PORT}`);
   console.log(`Mode: ${MODE}`);
+  if (process.env.REVERE_SCREEN_WATCH === "1") {
+    startScreenWatch({
+      intervalMs: process.env.REVERE_SCREEN_WATCH_INTERVAL_MS,
+      label: process.env.REVERE_SCREEN_WATCH_LABEL
+    }).catch((error) => {
+      console.error(`Screen watch failed to start: ${error.message}`);
+    });
+  }
 });
 
 async function dispatchEvent(event) {
@@ -65,6 +131,251 @@ function formatEvent(event) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildAgentAttentionEvent(payload) {
+  const agent = String(payload.agent || payload.source || "Agent").trim();
+  const summary = String(
+    payload.summary ||
+      payload.message ||
+      payload.task ||
+      payload.prompt ||
+      "An agent is waiting for your input."
+  ).trim();
+
+  return {
+    type: "agent_attention",
+    title: payload.title || `${agent} needs you`,
+    summary,
+    url: payload.url || payload.threadUrl || "",
+    profile: "agent",
+    source: "agent_attention",
+    priority: payload.priority || "high",
+    tags: payload.tags || "robot,bell",
+    timestamp: new Date().toISOString()
+  };
+}
+
+async function startScreenWatch(options = {}) {
+  stopScreenWatch();
+  screenWatchState.intervalMs = normalizeScreenWatchInterval(options.intervalMs);
+  screenWatchState.label = String(options.label || "Desktop").trim() || "Desktop";
+  screenWatchState.previousSample = null;
+  screenWatchState.lastEventAt = 0;
+  screenWatchState.timer = setInterval(() => {
+    runScreenWatchPass("timer").catch((error) => {
+      console.error(`Screen watch scan failed: ${error.message}`);
+    });
+  }, screenWatchState.intervalMs);
+  await runScreenWatchPass("start");
+}
+
+function stopScreenWatch() {
+  if (screenWatchState.timer) {
+    clearInterval(screenWatchState.timer);
+  }
+  screenWatchState.timer = null;
+  screenWatchState.inFlight = false;
+  screenWatchState.previousSample = null;
+}
+
+function screenWatchStatus() {
+  return {
+    running: Boolean(screenWatchState.timer),
+    intervalMs: screenWatchState.intervalMs,
+    lastScanAt: screenWatchState.lastScanAt
+      ? new Date(screenWatchState.lastScanAt).toISOString()
+      : "",
+    lastEventAt: screenWatchState.lastEventAt
+      ? new Date(screenWatchState.lastEventAt).toISOString()
+      : "",
+    label: screenWatchState.label
+  };
+}
+
+async function runScreenWatchPass(reason) {
+  if (screenWatchState.inFlight) {
+    return;
+  }
+
+  screenWatchState.inFlight = true;
+  screenWatchState.lastScanAt = Date.now();
+  try {
+    const currentSample = await captureDesktopSample();
+    const previousSample = screenWatchState.previousSample;
+    screenWatchState.previousSample = currentSample;
+    if (!previousSample) {
+      return;
+    }
+
+    const diff = compareImageSamples(previousSample, currentSample);
+    if (!isMeaningfulScreenDiff(diff, currentSample)) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - screenWatchState.lastEventAt < SCREEN_WATCH_EVENT_COOLDOWN_MS) {
+      return;
+    }
+
+    screenWatchState.lastEventAt = now;
+    await dispatchEvent(buildScreenWatchEvent(diff, reason));
+  } finally {
+    screenWatchState.inFlight = false;
+  }
+}
+
+async function captureDesktopSample() {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const basePath = path.join(os.tmpdir(), `revere-screen-${id}`);
+  const pngPath = `${basePath}.png`;
+  const bmpPath = `${basePath}.bmp`;
+
+  try {
+    await execFileAsync("/usr/sbin/screencapture", ["-x", "-t", "png", pngPath], {
+      timeout: 10000
+    });
+    await execFileAsync(
+      "/usr/bin/sips",
+      [
+        "-s",
+        "format",
+        "bmp",
+        "-z",
+        String(SCREEN_SAMPLE_HEIGHT),
+        String(SCREEN_SAMPLE_WIDTH),
+        pngPath,
+        "--out",
+        bmpPath
+      ],
+      { timeout: 10000 }
+    );
+    const bytes = await fs.readFile(bmpPath);
+    return parseBmpSample(bytes);
+  } finally {
+    await fs.unlink(pngPath).catch(() => {});
+    await fs.unlink(bmpPath).catch(() => {});
+  }
+}
+
+function parseBmpSample(bytes) {
+  if (bytes[0] !== 0x42 || bytes[1] !== 0x4d) {
+    throw new Error("sips did not return a BMP image.");
+  }
+
+  const dataOffset = bytes.readUInt32LE(10);
+  const width = bytes.readInt32LE(18);
+  const rawHeight = bytes.readInt32LE(22);
+  const bitsPerPixel = bytes.readUInt16LE(28);
+  if (![24, 32].includes(bitsPerPixel)) {
+    throw new Error(`Unsupported BMP depth: ${bitsPerPixel}`);
+  }
+
+  const height = Math.abs(rawHeight);
+  const topDown = rawHeight < 0;
+  const bytesPerPixel = bitsPerPixel / 8;
+  const rowStride = Math.floor((bitsPerPixel * width + 31) / 32) * 4;
+  const pixels = new Uint8Array(width * height);
+
+  for (let y = 0; y < height; y += 1) {
+    const sourceY = topDown ? y : height - 1 - y;
+    const rowOffset = dataOffset + sourceY * rowStride;
+    for (let x = 0; x < width; x += 1) {
+      const offset = rowOffset + x * bytesPerPixel;
+      const blue = bytes[offset];
+      const green = bytes[offset + 1];
+      const red = bytes[offset + 2];
+      pixels[y * width + x] = Math.round(red * 0.299 + green * 0.587 + blue * 0.114);
+    }
+  }
+
+  return { width, height, pixels };
+}
+
+function compareImageSamples(previous, current) {
+  if (!previous || !current || previous.width !== current.width || previous.height !== current.height) {
+    return null;
+  }
+
+  const width = current.width;
+  const height = current.height;
+  const totalPixels = width * height;
+  let changedPixels = 0;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let index = 0; index < totalPixels; index += 1) {
+    const diff = Math.abs(current.pixels[index] - previous.pixels[index]);
+    if (diff < SCREEN_PIXEL_DIFF_THRESHOLD) {
+      continue;
+    }
+
+    changedPixels += 1;
+    const x = index % width;
+    const y = Math.floor(index / width);
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+
+  if (!changedPixels) {
+    return null;
+  }
+
+  const bboxWidth = maxX - minX + 1;
+  const bboxHeight = maxY - minY + 1;
+  return {
+    changedPixels,
+    changedRatio: changedPixels / totalPixels,
+    bboxRatio: (bboxWidth * bboxHeight) / totalPixels,
+    bboxWidthRatio: bboxWidth / width,
+    bboxHeightRatio: bboxHeight / height,
+    minX,
+    minY,
+    maxX,
+    maxY
+  };
+}
+
+function isMeaningfulScreenDiff(diff, sample) {
+  if (!diff) {
+    return false;
+  }
+
+  return (
+    diff.changedRatio >= SCREEN_DIFF_RATIO_THRESHOLD &&
+    diff.bboxRatio >= SCREEN_BBOX_RATIO_THRESHOLD &&
+    !isThinScreenEdgeStrip(diff, sample.width, sample.height)
+  );
+}
+
+function isThinScreenEdgeStrip(diff, width, height) {
+  const edge = SCREEN_BBOX_EDGE_RATIO_THRESHOLD;
+  const leftEdge = diff.minX <= Math.floor(width * edge);
+  const rightEdge = diff.maxX >= width - 1 - Math.floor(width * edge);
+  const topEdge = diff.minY <= Math.floor(height * edge);
+  const bottomEdge = diff.maxY >= height - 1 - Math.floor(height * edge);
+  const thinVerticalStrip = diff.bboxWidthRatio < edge && (leftEdge || rightEdge);
+  const thinHorizontalStrip = diff.bboxHeightRatio < edge && (topEdge || bottomEdge);
+  return thinVerticalStrip || thinHorizontalStrip;
+}
+
+function buildScreenWatchEvent(diff, reason) {
+  const percent = Math.max(1, Math.round(diff.changedRatio * 100));
+  return {
+    type: "screen_update",
+    title: `${screenWatchState.label} changed`,
+    summary: `Visible desktop changed (${percent}% of sampled pixels changed).`,
+    url: "",
+    profile: "visual",
+    source: `screen_watch:${reason}`,
+    priority: "high",
+    tags: "desktop,bell",
+    timestamp: new Date().toISOString()
+  };
 }
 
 async function sendViaTwilio(event) {
@@ -134,8 +445,8 @@ async function sendViaNtfy(event) {
     method: "POST",
     headers: {
       Title: event.title || "Website update",
-      Priority: "urgent",
-      Tags: event.profile === "sports" ? "rotating_light,trophy" : "rotating_light,bell",
+      Priority: normalizeNtfyPriority(event.priority || "urgent"),
+      Tags: formatNtfyTags(event),
       Click: event.url || ""
     },
     body: formatEvent(event)
@@ -236,4 +547,42 @@ function normalizeSubscriptionName(value) {
     );
   }
   return name;
+}
+
+function normalizeScreenWatchInterval(value) {
+  const intervalMs = Number(value || SCREEN_WATCH_DEFAULT_INTERVAL_MS);
+  if (!Number.isFinite(intervalMs)) {
+    return SCREEN_WATCH_DEFAULT_INTERVAL_MS;
+  }
+  return Math.min(
+    SCREEN_WATCH_MAX_INTERVAL_MS,
+    Math.max(SCREEN_WATCH_MIN_INTERVAL_MS, Math.round(intervalMs))
+  );
+}
+
+function normalizeNtfyPriority(value) {
+  const priority = String(value || "").toLowerCase();
+  return ["min", "low", "default", "high", "urgent", "1", "2", "3", "4", "5"].includes(priority)
+    ? priority
+    : "urgent";
+}
+
+function formatNtfyTags(event) {
+  if (Array.isArray(event.tags)) {
+    return event.tags.map((tag) => String(tag).trim()).filter(Boolean).join(",");
+  }
+
+  if (typeof event.tags === "string" && event.tags.trim()) {
+    return event.tags.trim();
+  }
+
+  if (event.profile === "sports") {
+    return "rotating_light,trophy";
+  }
+
+  if (event.profile === "agent") {
+    return "robot,bell";
+  }
+
+  return "rotating_light,bell";
 }

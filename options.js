@@ -4,6 +4,9 @@ const webhookInput = document.getElementById("webhook-url");
 const ntfyServerInput = document.getElementById("ntfy-server");
 const subscriptionNameInput = document.getElementById("subscription-name");
 const notificationsInput = document.getElementById("notifications-enabled");
+const visualScanInput = document.getElementById("visual-scan-enabled");
+const visualScanIntervalInput = document.getElementById("visual-scan-interval");
+const debuggerCaptureInput = document.getElementById("debugger-capture-enabled");
 const saveButton = document.getElementById("save");
 const sendTestButton = document.getElementById("send-test");
 const messageEl = document.getElementById("message");
@@ -66,18 +69,22 @@ async function loadSettings() {
   ntfyServerInput.value = settings.ntfyServer || "https://ntfy.sh";
   subscriptionNameInput.value = settings.subscriptionName || "";
   notificationsInput.checked = settings.notificationsEnabled !== false;
+  visualScanInput.checked = settings.visualScanEnabled !== false;
+  visualScanIntervalInput.value = String(settings.visualScanIntervalSeconds || 5);
+  debuggerCaptureInput.checked = settings.debuggerCaptureEnabled !== false;
 }
 
 async function saveSettings() {
   const webhookUrl = normalizeWebhookUrl(webhookInput.value.trim(), subscriptionNameInput.value.trim());
   const ntfyServer = ntfyServerInput.value.trim() || "https://ntfy.sh";
   const subscriptionName = subscriptionNameInput.value.trim();
+  const visualScanIntervalSeconds = normalizeVisualScanInterval(visualScanIntervalInput.value);
 
   messageEl.textContent = "Saving...";
   saveButton.disabled = true;
 
   try {
-    validateSettings({ webhookUrl, ntfyServer, subscriptionName });
+    validateSettings({ webhookUrl, ntfyServer, subscriptionName, visualScanIntervalSeconds });
     const { [SETTINGS_KEY]: existingSettings = {} } = await chrome.storage.local.get(SETTINGS_KEY);
 
     await chrome.storage.local.set({
@@ -86,11 +93,15 @@ async function saveSettings() {
         webhookUrl,
         ntfyServer,
         subscriptionName,
-        notificationsEnabled: notificationsInput.checked
+        notificationsEnabled: notificationsInput.checked,
+        visualScanEnabled: visualScanInput.checked,
+        visualScanIntervalSeconds,
+        debuggerCaptureEnabled: debuggerCaptureInput.checked
       }
     });
 
     webhookInput.value = webhookUrl;
+    visualScanIntervalInput.value = String(visualScanIntervalSeconds);
     messageEl.textContent = subscriptionName
       ? "Saved. Revere will send desktop alerts and phone pushes to your ntfy topic."
       : "Saved. Desktop alerts stay on, and the webhook remains optional.";
@@ -251,7 +262,7 @@ function renderSteps(onboarding) {
     .join("");
 }
 
-function validateSettings({ webhookUrl, ntfyServer, subscriptionName }) {
+function validateSettings({ webhookUrl, ntfyServer, subscriptionName, visualScanIntervalSeconds }) {
   if (webhookUrl) {
     assertValidUrl(webhookUrl, "Enter a valid webhook URL.");
   }
@@ -264,6 +275,10 @@ function validateSettings({ webhookUrl, ntfyServer, subscriptionName }) {
     throw new Error(
       "ntfy topic names must be 3-64 characters and use only letters, numbers, dots, underscores, or dashes."
     );
+  }
+
+  if (!Number.isFinite(visualScanIntervalSeconds)) {
+    throw new Error("Visual scan seconds must be a number.");
   }
 }
 
@@ -291,16 +306,25 @@ function normalizeWebhookUrl(webhookUrl, subscriptionName) {
   }
 }
 
+function normalizeVisualScanInterval(value) {
+  const seconds = Number(value || 5);
+  if (!Number.isFinite(seconds)) {
+    return NaN;
+  }
+  return Math.min(60, Math.max(2, Math.round(seconds)));
+}
+
 function formatDestinations(settings) {
   const desktop = settings.notificationsEnabled !== false;
   const phone = Boolean(settings.subscriptionName || settings.webhookUrl);
+  const visual = settings.visualScanEnabled !== false ? "Visual" : "";
   if (desktop && phone) {
-    return "Desktop + Phone";
+    return ["Desktop + Phone", visual].filter(Boolean).join(" + ");
   }
   if (phone) {
-    return "Phone";
+    return ["Phone", visual].filter(Boolean).join(" + ");
   }
-  return "Desktop";
+  return [desktop ? "Desktop" : "Off", visual].filter(Boolean).join(" + ");
 }
 
 function formatMode(mode) {

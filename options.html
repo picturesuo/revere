@@ -339,6 +339,20 @@
                 <input id="notifications-enabled" type="checkbox">
                 Enable desktop notifications
               </label>
+              <div class="two-up">
+                <label>
+                  <input id="visual-scan-enabled" type="checkbox">
+                  Background visual scans
+                </label>
+                <label>
+                  Visual scan seconds
+                  <input id="visual-scan-interval" type="number" min="2" max="60" step="1" placeholder="5">
+                </label>
+              </div>
+              <label>
+                <input id="debugger-capture-enabled" type="checkbox">
+                Capture inactive tabs with Chrome debugger
+              </label>
               <div class="actions">
                 <button class="primary" id="save">Save Settings</button>
                 <button class="secondary" id="send-test">Send Test Notification</button>

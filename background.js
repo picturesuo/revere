@@ -8,6 +8,14 @@ const SCREENSHOT_PIXEL_DIFF_THRESHOLD = 24;
 const SCREENSHOT_DIFF_RATIO_THRESHOLD = 0.005;
 const SCREENSHOT_BBOX_RATIO_THRESHOLD = 0.01;
 const SCREENSHOT_BBOX_EDGE_RATIO_THRESHOLD = 0.02;
+const VISUAL_SCAN_ALARM_NAME = "revere-visual-scan";
+const VISUAL_SCAN_DEFAULT_INTERVAL_SECONDS = 5;
+const VISUAL_SCAN_MIN_INTERVAL_SECONDS = 2;
+const VISUAL_SCAN_MAX_INTERVAL_SECONDS = 60;
+const VISUAL_SCAN_ALARM_PERIOD_MINUTES = 0.5;
+const VISUAL_SCAN_MAX_TABS_PER_PASS = 6;
+const VISUAL_EVENT_FINGERPRINT_TTL_MS = 20000;
+const DEBUGGER_PROTOCOL_VERSION = "1.3";
 const NOTIFICATION_TARGETS_KEY = "notificationTargets";
 const NOTIFICATION_ICON_URL = chrome.runtime.getURL("icon-128.png");
 const DEFAULT_SETTINGS = {
@@ -16,17 +24,59 @@ const DEFAULT_SETTINGS = {
   subscriptionName: "",
   notificationsEnabled: true,
   ntfyTitleTemplate: "",
-  ntfyMessageTemplate: ""
+  ntfyMessageTemplate: "",
+  visualScanEnabled: true,
+  visualScanIntervalSeconds: VISUAL_SCAN_DEFAULT_INTERVAL_SECONDS,
+  debuggerCaptureEnabled: true
 };
 
 chrome.runtime.onInstalled.addListener(async () => {
   const { [SETTINGS_KEY]: settings } = await chrome.storage.local.get(SETTINGS_KEY);
   if (!settings) {
     await chrome.storage.local.set({ [SETTINGS_KEY]: DEFAULT_SETTINGS });
+  } else {
+    await chrome.storage.local.set({ [SETTINGS_KEY]: { ...DEFAULT_SETTINGS, ...settings } });
   }
+  await ensureVisualScanScheduler();
 });
 
 const screenshotSamples = new Map();
+const recentVisualFingerprints = new Map();
+let visualScanTimerId = null;
+let visualScanTimerIntervalSeconds = 0;
+let visualScanInFlight = false;
+let visualScanCursor = 0;
+let lastVisualScanAt = 0;
+
+ensureVisualScanScheduler().catch((error) => {
+  console.error("Visual scan scheduler failed:", error);
+});
+
+chrome.runtime.onStartup?.addListener(() => {
+  ensureVisualScanScheduler().catch((error) => {
+    console.error("Visual scan startup failed:", error);
+  });
+});
+
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name !== VISUAL_SCAN_ALARM_NAME) {
+    return;
+  }
+
+  scanWatchedTabsVisually("alarm").catch((error) => {
+    console.error("Visual alarm scan failed:", error);
+  });
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local" || (!changes[WATCHED_TABS_KEY] && !changes[SETTINGS_KEY])) {
+    return;
+  }
+
+  ensureVisualScanScheduler().catch((error) => {
+    console.error("Visual scheduler sync failed:", error);
+  });
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
@@ -104,6 +154,13 @@ async function getDashboardData(tabId) {
     watches,
     currentWatch: watchedTabs[String(tabId)] || null,
     recentEvents: events,
+    visualScanner: {
+      enabled: settings.visualScanEnabled !== false,
+      intervalSeconds: normalizeVisualScanInterval(settings.visualScanIntervalSeconds),
+      debuggerCaptureEnabled: settings.debuggerCaptureEnabled !== false,
+      timerActive: Boolean(visualScanTimerId),
+      lastScanAt: lastVisualScanAt ? new Date(lastVisualScanAt).toISOString() : ""
+    },
     onboarding: {
       extensionLoaded: true,
       phonePushReady: Boolean(settings.subscriptionName || settings.webhookUrl),
@@ -267,6 +324,197 @@ async function handleVisibleScreenshotRequest(message, sender) {
     return { captured: false, changed: false };
   }
 
+  return processVisualSample({
+    tabId,
+    watch,
+    settings,
+    dataUrl,
+    captureMethod: "visible_tab",
+    url: message.url || sender.tab.url || "",
+    title: message.title || sender.tab.title || "Visual update"
+  });
+}
+
+async function ensureVisualScanScheduler() {
+  const [watchedTabs, settings] = await Promise.all([
+    getStoredObject(WATCHED_TABS_KEY),
+    getSettings()
+  ]);
+  const hasWatches = Object.keys(watchedTabs).length > 0;
+  const enabled = hasWatches && settings.visualScanEnabled !== false;
+
+  if (!enabled) {
+    stopVisualScanTimer();
+    if (chrome.alarms?.clear) {
+      await chrome.alarms.clear(VISUAL_SCAN_ALARM_NAME).catch(() => {});
+    }
+    return;
+  }
+
+  const intervalSeconds = normalizeVisualScanInterval(settings.visualScanIntervalSeconds);
+  startVisualScanTimer(intervalSeconds);
+
+  if (chrome.alarms?.create) {
+    await chrome.alarms.create(VISUAL_SCAN_ALARM_NAME, {
+      delayInMinutes: VISUAL_SCAN_ALARM_PERIOD_MINUTES,
+      periodInMinutes: VISUAL_SCAN_ALARM_PERIOD_MINUTES
+    }).catch((error) => {
+      console.warn("Visual alarm creation failed:", error);
+    });
+  }
+}
+
+function startVisualScanTimer(intervalSeconds) {
+  if (visualScanTimerId && visualScanTimerIntervalSeconds === intervalSeconds) {
+    return;
+  }
+
+  stopVisualScanTimer();
+  visualScanTimerIntervalSeconds = intervalSeconds;
+  visualScanTimerId = setInterval(() => {
+    scanWatchedTabsVisually("timer").catch((error) => {
+      console.error("Visual timer scan failed:", error);
+    });
+  }, intervalSeconds * 1000);
+}
+
+function stopVisualScanTimer() {
+  if (visualScanTimerId) {
+    clearInterval(visualScanTimerId);
+  }
+  visualScanTimerId = null;
+  visualScanTimerIntervalSeconds = 0;
+}
+
+async function scanWatchedTabsVisually(reason = "manual") {
+  if (visualScanInFlight) {
+    return;
+  }
+
+  const [watchedTabs, settings] = await Promise.all([
+    getStoredObject(WATCHED_TABS_KEY),
+    getSettings()
+  ]);
+  if (settings.visualScanEnabled === false) {
+    await ensureVisualScanScheduler();
+    return;
+  }
+
+  const intervalSeconds = normalizeVisualScanInterval(settings.visualScanIntervalSeconds);
+  const minGapMs = Math.max(1000, intervalSeconds * 1000 - 250);
+  const now = Date.now();
+  if (reason !== "manual" && lastVisualScanAt && now - lastVisualScanAt < minGapMs) {
+    return;
+  }
+
+  const watches = Object.entries(watchedTabs)
+    .map(([tabId, watch]) => ({ tabId: Number(tabId), watch }))
+    .filter((item) => Number.isInteger(item.tabId) && item.tabId > 0);
+  if (!watches.length) {
+    await ensureVisualScanScheduler();
+    return;
+  }
+
+  visualScanInFlight = true;
+  lastVisualScanAt = now;
+  try {
+    const ordered = rotateVisualWatches(watches);
+    for (const { tabId, watch } of ordered.slice(0, VISUAL_SCAN_MAX_TABS_PER_PASS)) {
+      await scanTabVisually(tabId, watch, settings);
+    }
+  } finally {
+    visualScanInFlight = false;
+    pruneRecentVisualFingerprints(Date.now());
+  }
+}
+
+function rotateVisualWatches(watches) {
+  if (watches.length <= VISUAL_SCAN_MAX_TABS_PER_PASS) {
+    return watches;
+  }
+
+  const start = visualScanCursor % watches.length;
+  visualScanCursor = (start + VISUAL_SCAN_MAX_TABS_PER_PASS) % watches.length;
+  return [...watches.slice(start), ...watches.slice(0, start)];
+}
+
+async function scanTabVisually(tabId, watch, settings) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || tab.discarded || !isCapturableTabUrl(tab.url)) {
+    return;
+  }
+
+  const capture = await captureTabScreenshot(tab, settings);
+  if (!capture?.dataUrl) {
+    return;
+  }
+
+  await processVisualSample({
+    tabId,
+    watch,
+    settings,
+    dataUrl: capture.dataUrl,
+    captureMethod: capture.method,
+    url: tab.url || watch.url || "",
+    title: tab.title || watch.name || "Visual update"
+  });
+}
+
+async function captureTabScreenshot(tab, settings) {
+  if (settings.debuggerCaptureEnabled !== false) {
+    const debuggerCapture = await captureTabScreenshotWithDebugger(tab.id);
+    if (debuggerCapture) {
+      return { dataUrl: debuggerCapture, method: "debugger_screenshot" };
+    }
+  }
+
+  if (!tab.active || typeof tab.windowId !== "number") {
+    return null;
+  }
+
+  const windowInfo = await chrome.windows.get(tab.windowId).catch(() => null);
+  if (!windowInfo?.focused) {
+    return null;
+  }
+
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    return dataUrl ? { dataUrl, method: "visible_tab" } : null;
+  } catch (error) {
+    console.warn("Visible tab visual capture failed:", error);
+    return null;
+  }
+}
+
+async function captureTabScreenshotWithDebugger(tabId) {
+  if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
+    return null;
+  }
+
+  const target = { tabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, DEBUGGER_PROTOCOL_VERSION);
+    attached = true;
+    await chrome.debugger.sendCommand(target, "Page.enable");
+    const result = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+      optimizeForSpeed: true
+    });
+    return result?.data ? `data:image/png;base64,${result.data}` : null;
+  } catch (error) {
+    console.warn("Debugger visual capture failed:", error);
+    return null;
+  } finally {
+    if (attached) {
+      await chrome.debugger.detach(target).catch(() => {});
+    }
+  }
+}
+
+async function processVisualSample({ tabId, watch, settings, dataUrl, captureMethod, url, title }) {
   const currentSample = await buildScreenshotSample(dataUrl);
   if (!currentSample) {
     return { captured: false, changed: false };
@@ -276,12 +524,12 @@ async function handleVisibleScreenshotRequest(message, sender) {
   screenshotSamples.set(String(tabId), currentSample);
 
   if (!previousSample) {
-    return { captured: true, changed: false };
+    return { captured: true, changed: false, method: captureMethod };
   }
 
   const diff = compareScreenshotSamples(previousSample, currentSample);
   if (!diff) {
-    return { captured: true, changed: false };
+    return { captured: true, changed: false, method: captureMethod };
   }
 
   if (
@@ -292,6 +540,7 @@ async function handleVisibleScreenshotRequest(message, sender) {
     return {
       captured: true,
       changed: false,
+      method: captureMethod,
       changedRatio: diff.changedRatio,
       bboxRatio: diff.bboxRatio,
       bboxWidthRatio: diff.bboxWidthRatio,
@@ -299,18 +548,30 @@ async function handleVisibleScreenshotRequest(message, sender) {
     };
   }
 
+  const fingerprint = `screenshot:${tabId}:${diff.signature}`;
+  const now = Date.now();
+  if (isRecentVisualFingerprint(fingerprint, now)) {
+    return {
+      captured: true,
+      changed: false,
+      duplicate: true,
+      method: captureMethod
+    };
+  }
+  rememberVisualFingerprint(fingerprint, now);
+
   await dispatchEvent(
     applyWatchTemplates(
       {
         type: "page_update",
         tabId,
-        url: message.url || sender.tab.url || "",
-        title: message.title || sender.tab.title || "Visual update",
-        summary: "Visible popup-style change detected on the page.",
-        fingerprint: `screenshot:${tabId}:${diff.signature}`,
+        url,
+        title: title || "Visual update",
+        summary: buildVisualSummary(captureMethod, diff),
+        fingerprint,
         profile: "visual",
         score: 12,
-        source: "screenshot",
+        source: captureMethod,
         timestamp: new Date().toISOString()
       },
       watch
@@ -321,11 +582,62 @@ async function handleVisibleScreenshotRequest(message, sender) {
   return {
     captured: true,
     changed: true,
+    method: captureMethod,
     changedRatio: diff.changedRatio,
     bboxRatio: diff.bboxRatio,
     bboxWidthRatio: diff.bboxWidthRatio,
     bboxHeightRatio: diff.bboxHeightRatio
   };
+}
+
+function buildVisualSummary(captureMethod, diff) {
+  const percent = Math.max(1, Math.round(diff.changedRatio * 100));
+  if (captureMethod === "debugger_screenshot") {
+    return `Background tab visual change detected (${percent}% of sampled pixels changed).`;
+  }
+  return `Visible page visual change detected (${percent}% of sampled pixels changed).`;
+}
+
+function normalizeVisualScanInterval(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) {
+    return VISUAL_SCAN_DEFAULT_INTERVAL_SECONDS;
+  }
+  return Math.min(
+    VISUAL_SCAN_MAX_INTERVAL_SECONDS,
+    Math.max(VISUAL_SCAN_MIN_INTERVAL_SECONDS, Math.round(seconds))
+  );
+}
+
+function isCapturableTabUrl(url) {
+  if (!url) {
+    return false;
+  }
+
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:" || protocol === "file:";
+  } catch (error) {
+    return false;
+  }
+}
+
+function isRecentVisualFingerprint(fingerprint, now) {
+  const previous = recentVisualFingerprints.get(fingerprint);
+  return Boolean(previous && now - previous < VISUAL_EVENT_FINGERPRINT_TTL_MS);
+}
+
+function rememberVisualFingerprint(fingerprint, now) {
+  recentVisualFingerprints.set(fingerprint, now);
+  pruneRecentVisualFingerprints(now);
+}
+
+function pruneRecentVisualFingerprints(now) {
+  for (const [fingerprint, sentAt] of recentVisualFingerprints.entries()) {
+    if (now - sentAt > VISUAL_EVENT_FINGERPRINT_TTL_MS) {
+      recentVisualFingerprints.delete(fingerprint);
+    }
+  }
 }
 
 async function dispatchEvent(event, providedSettings, options = {}) {
@@ -539,8 +851,8 @@ async function postNtfy(settings, event) {
     method: "POST",
     headers: {
       Title: ntfyTitle || event.title || "Website update",
-      Priority: "urgent",
-      Tags: event.profile === "sports" ? "rotating_light,trophy" : "rotating_light,bell",
+      Priority: normalizeNtfyPriority(event.priority || "urgent"),
+      Tags: formatNtfyTags(event),
       Click: event.url || ""
     },
     body: ntfyMessage || formatEvent(event)
@@ -575,6 +887,30 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
   await chrome.tabs.create({ url });
   await chrome.notifications.clear(notificationId);
   await removeStoredKey(NOTIFICATION_TARGETS_KEY, notificationId);
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (!changeInfo.url && !changeInfo.title) {
+    return;
+  }
+
+  if (changeInfo.url) {
+    screenshotSamples.delete(String(tabId));
+  }
+
+  await updateStoredObject(WATCHED_TABS_KEY, (next) => {
+    const watch = next[String(tabId)];
+    if (!watch) {
+      return next;
+    }
+
+    next[String(tabId)] = {
+      ...watch,
+      url: changeInfo.url || tab.url || watch.url,
+      name: watch.name || tab.title || ""
+    };
+    return next;
+  });
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -685,6 +1021,33 @@ function normalizeSubscriptionName(value) {
     );
   }
   return name;
+}
+
+function normalizeNtfyPriority(value) {
+  const priority = String(value || "").toLowerCase();
+  return ["min", "low", "default", "high", "urgent", "1", "2", "3", "4", "5"].includes(priority)
+    ? priority
+    : "urgent";
+}
+
+function formatNtfyTags(event) {
+  if (Array.isArray(event.tags)) {
+    return event.tags.map((tag) => String(tag).trim()).filter(Boolean).join(",");
+  }
+
+  if (typeof event.tags === "string" && event.tags.trim()) {
+    return event.tags.trim();
+  }
+
+  if (event.profile === "sports") {
+    return "rotating_light,trophy";
+  }
+
+  if (event.profile === "agent") {
+    return "robot,bell";
+  }
+
+  return "rotating_light,bell";
 }
 
 function shouldPostWebhook(settings) {
