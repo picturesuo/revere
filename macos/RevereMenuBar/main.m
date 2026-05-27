@@ -38,9 +38,10 @@ static NSString * const RevereNotifyOnChangesDefaultKey = @"notifyOnChanges";
 @implementation RevereDeviceInfo
 @end
 
-@interface RevereAppDelegate : NSObject <NSApplicationDelegate>
+@interface RevereAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property(nonatomic, strong) NSStatusItem *statusItem;
 @property(nonatomic, strong) NSMenu *menu;
+@property(nonatomic, strong) NSMenuItem *dashboardMenuItem;
 @property(nonatomic, strong) NSMenuItem *permissionStatusItem;
 @property(nonatomic, strong) NSMenuItem *requestCameraPermissionItem;
 @property(nonatomic, strong) NSMenuItem *requestNotificationPermissionItem;
@@ -213,8 +214,13 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
 
 - (void)buildMenu {
     self.menu = [[NSMenu alloc] initWithTitle:@"Revere"];
+    self.menu.delegate = self;
     self.menu.autoenablesItems = NO;
-    [self.menu addItemWithTitle:@"Revere" action:nil keyEquivalent:@""].enabled = NO;
+    self.dashboardMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    self.dashboardMenuItem.view = [self dashboardMenuView];
+    [self.menu addItem:self.dashboardMenuItem];
+    [self.menu addItem:[NSMenuItem separatorItem]];
+
     NSMenuItem *openControls = [self.menu addItemWithTitle:@"Open Controls..." action:@selector(showControls:) keyEquivalent:@""];
     openControls.target = self;
     self.permissionStatusItem = [self.menu addItemWithTitle:@"Permissions: checking..." action:nil keyEquivalent:@""];
@@ -282,6 +288,198 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
     quit.target = self;
 }
 
+- (void)menuWillOpen:(NSMenu *)menu {
+    (void)menu;
+    self.dashboardMenuItem.view = [self dashboardMenuView];
+}
+
+- (NSView *)dashboardMenuView {
+    static const CGFloat width = 560.0;
+    static const CGFloat height = 520.0;
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+    view.wantsLayer = YES;
+    view.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.08 alpha:1.0].CGColor;
+
+    [view addSubview:[self dashboardPillWithTitle:@"Overview" frame:NSMakeRect(20, 466, 148, 42) selected:NO]];
+    [view addSubview:[self dashboardPillWithTitle:@"Revere" frame:NSMakeRect(206, 466, 148, 42) selected:YES]];
+    [view addSubview:[self dashboardPillWithTitle:@"Recorder" frame:NSMakeRect(392, 466, 148, 42) selected:NO]];
+    [view addSubview:[self dashboardRule:NSMakeRect(20, 446, 520, 1)]];
+
+    NSString *permission = [self compactPermissionSummary];
+    [view addSubview:[self dashboardText:@"Revere"
+                                   frame:NSMakeRect(20, 404, 190, 30)
+                                    font:[NSFont systemFontOfSize:22 weight:NSFontWeightBold]
+                                   color:NSColor.labelColor
+                               alignment:NSTextAlignmentLeft]];
+    [view addSubview:[self dashboardText:@"Updated just now"
+                                   frame:NSMakeRect(20, 382, 190, 22)
+                                    font:[NSFont systemFontOfSize:14 weight:NSFontWeightSemibold]
+                                   color:NSColor.secondaryLabelColor
+                               alignment:NSTextAlignmentLeft]];
+    [view addSubview:[self dashboardText:permission
+                                   frame:NSMakeRect(238, 384, 302, 46)
+                                    font:[NSFont systemFontOfSize:14 weight:NSFontWeightSemibold]
+                                   color:NSColor.secondaryLabelColor
+                               alignment:NSTextAlignmentRight]];
+    [view addSubview:[self dashboardRule:NSMakeRect(20, 364, 520, 1)]];
+
+    [view addSubview:[self dashboardText:@"Visual Watch"
+                                   frame:NSMakeRect(20, 324, 240, 30)
+                                    font:[NSFont systemFontOfSize:22 weight:NSFontWeightBold]
+                                   color:NSColor.labelColor
+                               alignment:NSTextAlignmentLeft]];
+    double watchProgress = self.watchRunning ? MIN(1.0, (double)MAX(1, self.captureCount) / 10.0) : 0.0;
+    [view addSubview:[self dashboardProgress:NSMakeRect(20, 304, 520, 10) value:watchProgress]];
+    NSString *watchLeft = self.watchRunning
+        ? [NSString stringWithFormat:@"%ld samples\n%ld changes", (long)self.captureCount, (long)self.changeCount]
+        : @"Idle\n0 changes";
+    NSString *watchRight = self.watchRunning
+        ? @"Sampling every 2s\nKeeps one tiny sample"
+        : @"Ready when permitted\nNo disk screenshots";
+    [view addSubview:[self dashboardText:watchLeft
+                                   frame:NSMakeRect(20, 254, 210, 42)
+                                    font:[NSFont systemFontOfSize:15 weight:NSFontWeightBold]
+                                   color:NSColor.labelColor
+                               alignment:NSTextAlignmentLeft]];
+    [view addSubview:[self dashboardText:watchRight
+                                   frame:NSMakeRect(330, 254, 210, 42)
+                                    font:[NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
+                                   color:NSColor.secondaryLabelColor
+                               alignment:NSTextAlignmentRight]];
+
+    [view addSubview:[self dashboardMetricWithTitle:@"Notify"
+                                              value:self.notifyOnChanges ? @"On" : @"Off"
+                                              frame:NSMakeRect(20, 202, 118, 44)]];
+    [view addSubview:[self dashboardMetricWithTitle:@"Mirror"
+                                              value:self.mirrorCamera ? @"On" : @"Off"
+                                              frame:NSMakeRect(154, 202, 118, 44)]];
+    [view addSubview:[self dashboardMetricWithTitle:@"Captures"
+                                              value:[NSString stringWithFormat:@"%ld", (long)self.captureCount]
+                                              frame:NSMakeRect(288, 202, 118, 44)]];
+    [view addSubview:[self dashboardMetricWithTitle:@"Changes"
+                                              value:[NSString stringWithFormat:@"%ld", (long)self.changeCount]
+                                              frame:NSMakeRect(422, 202, 118, 44)]];
+
+    [view addSubview:[self dashboardRule:NSMakeRect(20, 184, 520, 1)]];
+    [view addSubview:[self dashboardText:@"Recorder"
+                                   frame:NSMakeRect(20, 144, 240, 30)
+                                    font:[NSFont systemFontOfSize:22 weight:NSFontWeightBold]
+                                   color:NSColor.labelColor
+                               alignment:NSTextAlignmentLeft]];
+    NSString *recordStatus = self.recordStatusItem.title ?: @"Recorder: idle";
+    NSString *devices = self.deviceStatusItem.title ?: @"Devices: checking...";
+    [view addSubview:[self dashboardText:recordStatus
+                                   frame:NSMakeRect(20, 114, 520, 24)
+                                    font:[NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
+                                   color:NSColor.secondaryLabelColor
+                               alignment:NSTextAlignmentLeft]];
+    [view addSubview:[self dashboardText:devices
+                                   frame:NSMakeRect(20, 90, 520, 24)
+                                    font:[NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
+                                   color:NSColor.secondaryLabelColor
+                               alignment:NSTextAlignmentLeft]];
+
+    double readiness = 0.25;
+    if ([self ffmpegPath]) { readiness += 0.25; }
+    if ([self cameraPermissionSummary].length > 0) { readiness += 0.25; }
+    if (CGPreflightScreenCaptureAccess()) { readiness += 0.25; }
+    [view addSubview:[self dashboardProgress:NSMakeRect(20, 68, 520, 10) value:MIN(1.0, readiness)]];
+    [view addSubview:[self dashboardButtonWithTitle:self.watchToggleItem.title ?: @"Start Visual Watch"
+                                              frame:NSMakeRect(20, 22, 122, 32)
+                                             action:@selector(toggleWatch:)]];
+    NSButton *screenButton = [self dashboardButtonWithTitle:self.screenRecordItem.title ?: @"Screen"
+                                                      frame:NSMakeRect(152, 22, 112, 32)
+                                                     action:@selector(toggleScreenRecording:)];
+    screenButton.enabled = self.screenRecordItem.enabled;
+    [view addSubview:screenButton];
+    NSButton *faceButton = [self dashboardButtonWithTitle:self.faceRecordItem.title ?: @"Screen + Face"
+                                                    frame:NSMakeRect(274, 22, 132, 32)
+                                                   action:@selector(toggleFaceRecording:)];
+    faceButton.enabled = self.faceRecordItem.enabled;
+    [view addSubview:faceButton];
+    [view addSubview:[self dashboardButtonWithTitle:@"Run Self-Test"
+                                              frame:NSMakeRect(416, 22, 124, 32)
+                                             action:@selector(runSelfTest:)]];
+
+    return view;
+}
+
+- (NSTextField *)dashboardText:(NSString *)text
+                         frame:(NSRect)frame
+                          font:(NSFont *)font
+                         color:(NSColor *)color
+                     alignment:(NSTextAlignment)alignment {
+    NSTextField *label = [NSTextField labelWithString:text ?: @""];
+    label.frame = frame;
+    label.font = font;
+    label.textColor = color;
+    label.alignment = alignment;
+    label.lineBreakMode = NSLineBreakByWordWrapping;
+    label.maximumNumberOfLines = 2;
+    return label;
+}
+
+- (NSTextField *)dashboardPillWithTitle:(NSString *)title frame:(NSRect)frame selected:(BOOL)selected {
+    NSTextField *pill = [self dashboardText:title
+                                      frame:frame
+                                       font:[NSFont systemFontOfSize:17 weight:NSFontWeightBold]
+                                      color:selected ? NSColor.whiteColor : NSColor.secondaryLabelColor
+                                  alignment:NSTextAlignmentCenter];
+    pill.wantsLayer = YES;
+    pill.layer.cornerRadius = 10.0;
+    pill.layer.masksToBounds = YES;
+    pill.layer.backgroundColor = selected
+        ? [NSColor colorWithCalibratedRed:0.0 green:0.48 blue:1.0 alpha:1.0].CGColor
+        : [NSColor colorWithCalibratedWhite:0.12 alpha:1.0].CGColor;
+    return pill;
+}
+
+- (NSView *)dashboardRule:(NSRect)frame {
+    NSView *rule = [[NSView alloc] initWithFrame:frame];
+    rule.wantsLayer = YES;
+    rule.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.24 alpha:1.0].CGColor;
+    return rule;
+}
+
+- (NSProgressIndicator *)dashboardProgress:(NSRect)frame value:(double)value {
+    NSProgressIndicator *progress = [[NSProgressIndicator alloc] initWithFrame:frame];
+    progress.indeterminate = NO;
+    progress.minValue = 0.0;
+    progress.maxValue = 1.0;
+    progress.doubleValue = MAX(0.0, MIN(1.0, value));
+    progress.controlSize = NSControlSizeSmall;
+    progress.style = NSProgressIndicatorStyleBar;
+    if ([progress respondsToSelector:@selector(setContentTintColor:)]) {
+        [progress setValue:[NSColor colorWithCalibratedRed:0.33 green:0.75 blue:0.80 alpha:1.0]
+                    forKey:@"contentTintColor"];
+    }
+    return progress;
+}
+
+- (NSView *)dashboardMetricWithTitle:(NSString *)title value:(NSString *)value frame:(NSRect)frame {
+    NSView *metric = [[NSView alloc] initWithFrame:frame];
+    [metric addSubview:[self dashboardText:title
+                                     frame:NSMakeRect(0, 22, frame.size.width, 20)
+                                      font:[NSFont systemFontOfSize:13 weight:NSFontWeightBold]
+                                     color:NSColor.secondaryLabelColor
+                                 alignment:NSTextAlignmentLeft]];
+    [metric addSubview:[self dashboardText:value
+                                     frame:NSMakeRect(0, 0, frame.size.width, 24)
+                                      font:[NSFont monospacedDigitSystemFontOfSize:20 weight:NSFontWeightBold]
+                                     color:NSColor.labelColor
+                                 alignment:NSTextAlignmentLeft]];
+    return metric;
+}
+
+- (NSButton *)dashboardButtonWithTitle:(NSString *)title frame:(NSRect)frame action:(SEL)action {
+    NSButton *button = [NSButton buttonWithTitle:title target:self action:action];
+    button.frame = frame;
+    button.font = [NSFont systemFontOfSize:12 weight:NSFontWeightBold];
+    button.bezelStyle = NSBezelStyleRounded;
+    button.lineBreakMode = NSLineBreakByTruncatingTail;
+    return button;
+}
+
 - (void)updateMenuState {
     self.permissionStatusItem.title = [self permissionSummary];
     self.watchToggleItem.title = self.watchRunning ? @"Stop Visual Watch" : @"Start Visual Watch";
@@ -329,6 +527,11 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
     self.mirrorItem.title = self.mirrorCamera ? @"Mirror Face Overlay: On" : @"Mirror Face Overlay: Off";
     self.loginItem.title = [self launchAtLoginEnabled] ? @"Launch at Login: On" : @"Launch at Login: Off";
     [self refreshControlPanel];
+}
+
+- (NSString *)compactPermissionSummary {
+    NSString *screen = CGPreflightScreenCaptureAccess() ? @"Screen Recording granted" : @"Screen Recording needed";
+    return [NSString stringWithFormat:@"%@\n%@", screen, [self cameraPermissionSummary]];
 }
 
 - (NSString *)permissionSummary {

@@ -82,7 +82,7 @@ Run the menu-bar click-through verifier:
 ./scripts/verify-revere-menubar.sh
 ```
 
-`npm run check` also verifies the extension visual-diff logic with synthetic samples, including the tiny 128x72 grayscale sample size, edge-strip noise filtering, capturable URL guards, and notification template rendering.
+By default, the verifier is screen-safe: it builds, signs, installs, and checks the app bundle without clicking your menu bar, focusing apps, or taking desktop screenshots. `npm run check` also verifies the extension visual-diff logic with synthetic samples, including the tiny 128x72 grayscale sample size, edge-strip noise filtering, capturable URL guards, and notification template rendering.
 
 After granting Screen Recording permission, preserve that installed app identity:
 
@@ -90,13 +90,21 @@ After granting Screen Recording permission, preserve that installed app identity
 ./scripts/verify-revere-menubar.sh --no-build
 ```
 
-When Screen Recording is granted, the verifier also starts/stops `Start Visual Watch` and checks that samples are captured. When Camera is already granted too, it runs the 3-second screen+face and face-only recording tests without triggering a new permission prompt.
+Foreground menu-bar click-through is opt-in only:
+
+```bash
+./scripts/verify-revere-menubar.sh --no-build --foreground-ui
+```
+
+When Screen Recording is granted and foreground access is explicitly allowed, the verifier also starts/stops `Start Visual Watch` and checks that samples are captured. When Camera is already granted too, it runs the 3-second screen+face and face-only recording tests without triggering a new permission prompt.
 
 To also verify that the mirror preference survives relaunch:
 
 ```bash
 ./scripts/verify-revere-menubar.sh --no-build --test-mirror-persistence
 ```
+
+Mirror persistence click-through also requires `--foreground-ui`.
 
 The app shows a white template version of the Revere rider icon in the macOS menu bar. It includes:
 

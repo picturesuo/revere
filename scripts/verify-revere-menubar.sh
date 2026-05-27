@@ -6,25 +6,35 @@ APP_PATH="/Applications/Revere.app"
 DIAGNOSTICS_PATH="$HOME/Library/Logs/Revere/diagnostics.txt"
 BUILD_APP=1
 TEST_MIRROR_PERSISTENCE=0
+FOREGROUND_UI=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-build)
       BUILD_APP=0
       ;;
+    --foreground-ui|--click-through)
+      FOREGROUND_UI=1
+      ;;
     --test-mirror-persistence)
       TEST_MIRROR_PERSISTENCE=1
       ;;
     -h|--help)
       cat <<'HELP'
-Usage: scripts/verify-revere-menubar.sh [--no-build] [--test-mirror-persistence]
+Usage: scripts/verify-revere-menubar.sh [--no-build] [--foreground-ui] [--test-mirror-persistence]
 
-By default this rebuilds, signs, installs, launches, and click-through verifies
-Revere.app. Use --no-build after granting macOS Screen Recording permission so
-the verifier preserves the installed app identity that macOS approved.
+By default this rebuilds, signs, installs, and verifies Revere.app without
+controlling the foreground UI. It does not click the menu bar, focus apps, or
+take desktop screenshots.
+
+Use --foreground-ui only when the user explicitly approves visible menu-bar
+click-through for the current run. Use --no-build after granting macOS Screen
+Recording permission so the verifier preserves the installed app identity that
+macOS approved.
 
 --test-mirror-persistence toggles Mirror Face Overlay off, relaunches Revere to
-confirm the preference persisted, then toggles it back on.
+confirm the preference persisted, then toggles it back on. It requires
+--foreground-ui.
 HELP
       exit 0
       ;;
@@ -112,6 +122,27 @@ else
   [[ -x "$APP_PATH/Contents/MacOS/Revere" ]] || fail "$APP_PATH is not installed"
 fi
 codesign --verify --deep --strict "$APP_PATH"
+
+[[ -s "$APP_PATH/Contents/Resources/RevereStatusIcon.png" ]] || fail "status icon is missing"
+plutil -extract LSUIElement raw "$APP_PATH/Contents/Info.plist" | grep -q '^true$' || fail "Revere.app is not configured as an LSUIElement menu-bar app"
+binary_strings="$(strings "$APP_PATH/Contents/MacOS/Revere")"
+assert_contains "$binary_strings" "Open Controls..."
+assert_contains "$binary_strings" "Notify on Changes:"
+assert_contains "$binary_strings" "Start Visual Watch"
+assert_contains "$binary_strings" "Start Screen Recording"
+assert_contains "$binary_strings" "Start Screen + Face"
+assert_contains "$binary_strings" "Record 3s Screen + Face Test"
+assert_contains "$binary_strings" "Record 3s Face Test"
+assert_contains "$binary_strings" "Mirror Face Overlay:"
+assert_contains "$binary_strings" "Test Recording Plan"
+assert_contains "$binary_strings" "Run Self-Test"
+assert_contains "$binary_strings" "Request Notification Permission"
+
+if [[ "$FOREGROUND_UI" != "1" ]]; then
+  [[ "$TEST_MIRROR_PERSISTENCE" != "1" ]] || fail "--test-mirror-persistence requires --foreground-ui"
+  echo "PASS: Revere.app built, signed, and bundle-verified without foreground UI control."
+  exit 0
+fi
 
 pkill -INT ffmpeg >/dev/null 2>&1 || true
 sleep 1

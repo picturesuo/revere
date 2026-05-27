@@ -18,6 +18,7 @@
 - [x] Extend menu-bar verifier so granted Screen Recording proves live visual-watch sampling and granted Camera proves screen+face and face-only recording.
 - [x] Add extension visual-diff logic verifier for screenshot sample size, edge-noise filtering, capture guards, and templates.
 - [x] Add native Notify on Changes toggle so visual watch can send throttled macOS notifications for meaningful screen changes.
+- [x] Make menu-bar verification screen-safe by default; foreground menu clicking now requires explicit `--foreground-ui`.
 - [ ] Verify CodexBar-inspired visual monitoring and attention notification changes in Chrome.
 - [ ] Grant macOS Screen & System Audio Recording permission and re-test native visual watch/recording with real pixels.
 
