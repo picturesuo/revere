@@ -22,6 +22,7 @@ clang \
   -framework Cocoa \
   -framework AVFoundation \
   -framework CoreGraphics \
+  -framework QuartzCore \
   -framework UserNotifications \
   -o "$BUILD_BIN_DIR/Revere"
 

@@ -300,9 +300,7 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
     view.wantsLayer = YES;
     view.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.08 alpha:1.0].CGColor;
 
-    [view addSubview:[self dashboardPillWithTitle:@"Overview" frame:NSMakeRect(20, 466, 148, 42) selected:NO]];
-    [view addSubview:[self dashboardPillWithTitle:@"Revere" frame:NSMakeRect(206, 466, 148, 42) selected:YES]];
-    [view addSubview:[self dashboardPillWithTitle:@"Recorder" frame:NSMakeRect(392, 466, 148, 42) selected:NO]];
+    [view addSubview:[self dashboardTopBar:NSMakeRect(20, 466, 520, 42)]];
     [view addSubview:[self dashboardRule:NSMakeRect(20, 446, 520, 1)]];
 
     NSString *permission = [self compactPermissionSummary];
@@ -419,19 +417,81 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
     return label;
 }
 
-- (NSTextField *)dashboardPillWithTitle:(NSString *)title frame:(NSRect)frame selected:(BOOL)selected {
-    NSTextField *pill = [self dashboardText:title
-                                      frame:frame
-                                       font:[NSFont systemFontOfSize:17 weight:NSFontWeightBold]
+- (NSView *)dashboardTopBar:(NSRect)frame {
+    NSView *bar = [[NSView alloc] initWithFrame:frame];
+    bar.wantsLayer = YES;
+    bar.layer.cornerRadius = 13.0;
+    bar.layer.masksToBounds = NO;
+    bar.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.115 alpha:1.0].CGColor;
+    bar.layer.borderColor = [NSColor colorWithCalibratedWhite:0.24 alpha:1.0].CGColor;
+    bar.layer.borderWidth = 1.0;
+
+    NSShadow *shadow = [[NSShadow alloc] init];
+    shadow.shadowColor = [NSColor colorWithCalibratedWhite:0.0 alpha:0.28];
+    shadow.shadowOffset = NSMakeSize(0.0, -1.0);
+    shadow.shadowBlurRadius = 10.0;
+    bar.shadow = shadow;
+
+    CGFloat segmentWidth = frame.size.width / 3.0;
+    [bar addSubview:[self dashboardTopBarSegment:@"Overview"
+                                           frame:NSMakeRect(4, 4, segmentWidth - 8, 34)
+                                        selected:NO]];
+    [bar addSubview:[self dashboardTopBarSegment:@"Revere"
+                                           frame:NSMakeRect(segmentWidth + 4, 4, segmentWidth - 8, 34)
+                                        selected:YES]];
+    [bar addSubview:[self dashboardTopBarSegment:@"Recorder"
+                                           frame:NSMakeRect((segmentWidth * 2.0) + 4, 4, segmentWidth - 8, 34)
+                                        selected:NO]];
+
+    [bar addSubview:[self dashboardTopBarDivider:NSMakeRect(segmentWidth, 9, 1, 24)]];
+    [bar addSubview:[self dashboardTopBarDivider:NSMakeRect(segmentWidth * 2.0, 9, 1, 24)]];
+    return bar;
+}
+
+- (NSView *)dashboardTopBarSegment:(NSString *)title frame:(NSRect)frame selected:(BOOL)selected {
+    NSView *segment = [[NSView alloc] initWithFrame:frame];
+    segment.wantsLayer = YES;
+    segment.layer.cornerRadius = 10.0;
+    segment.layer.masksToBounds = YES;
+    segment.layer.backgroundColor = selected
+        ? [NSColor colorWithCalibratedRed:0.03 green:0.45 blue:0.86 alpha:1.0].CGColor
+        : [NSColor clearColor].CGColor;
+
+    if (selected) {
+        CAGradientLayer *shine = [CAGradientLayer layer];
+        shine.frame = segment.bounds;
+        shine.colors = @[
+            (__bridge id)[NSColor colorWithCalibratedRed:0.10 green:0.62 blue:1.0 alpha:1.0].CGColor,
+            (__bridge id)[NSColor colorWithCalibratedRed:0.02 green:0.39 blue:0.78 alpha:1.0].CGColor
+        ];
+        shine.startPoint = CGPointMake(0.0, 1.0);
+        shine.endPoint = CGPointMake(1.0, 0.0);
+        [segment.layer addSublayer:shine];
+
+        NSView *dot = [[NSView alloc] initWithFrame:NSMakeRect(18, 14, 6, 6)];
+        dot.wantsLayer = YES;
+        dot.layer.cornerRadius = 3.0;
+        dot.layer.backgroundColor = NSColor.whiteColor.CGColor;
+        [segment addSubview:dot];
+    }
+
+    CGFloat titleInset = selected ? 32.0 : 0.0;
+    NSTextField *label = [self dashboardText:title
+                                      frame:NSMakeRect(titleInset, 6, frame.size.width - titleInset, 22)
+                                       font:[NSFont systemFontOfSize:16 weight:selected ? NSFontWeightBold : NSFontWeightSemibold]
                                       color:selected ? NSColor.whiteColor : NSColor.secondaryLabelColor
                                   alignment:NSTextAlignmentCenter];
-    pill.wantsLayer = YES;
-    pill.layer.cornerRadius = 10.0;
-    pill.layer.masksToBounds = YES;
-    pill.layer.backgroundColor = selected
-        ? [NSColor colorWithCalibratedRed:0.0 green:0.48 blue:1.0 alpha:1.0].CGColor
-        : [NSColor colorWithCalibratedWhite:0.12 alpha:1.0].CGColor;
-    return pill;
+    label.maximumNumberOfLines = 1;
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
+    [segment addSubview:label];
+    return segment;
+}
+
+- (NSView *)dashboardTopBarDivider:(NSRect)frame {
+    NSView *divider = [[NSView alloc] initWithFrame:frame];
+    divider.wantsLayer = YES;
+    divider.layer.backgroundColor = [NSColor colorWithCalibratedWhite:1.0 alpha:0.07].CGColor;
+    return divider;
 }
 
 - (NSView *)dashboardRule:(NSRect)frame {
