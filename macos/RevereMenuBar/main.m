@@ -327,7 +327,8 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
                                    color:NSColor.labelColor
                                alignment:NSTextAlignmentLeft]];
     double watchProgress = self.watchRunning ? MIN(1.0, (double)MAX(1, self.captureCount) / 10.0) : 0.0;
-    [view addSubview:[self dashboardProgress:NSMakeRect(20, 304, 520, 10) value:watchProgress]];
+    [view addSubview:[self dashboardSparkline:NSMakeRect(20, 294, 520, 28) progress:watchProgress]];
+    [view addSubview:[self dashboardProgress:NSMakeRect(20, 282, 520, 8) value:watchProgress]];
     NSString *watchLeft = self.watchRunning
         ? [NSString stringWithFormat:@"%ld samples\n%ld changes", (long)self.captureCount, (long)self.changeCount]
         : @"Idle\n0 changes";
@@ -335,44 +336,44 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
         ? @"Sampling every 2s\nKeeps one tiny sample"
         : @"Ready when permitted\nNo disk screenshots";
     [view addSubview:[self dashboardText:watchLeft
-                                   frame:NSMakeRect(20, 254, 210, 42)
+                                   frame:NSMakeRect(20, 236, 210, 42)
                                     font:[NSFont systemFontOfSize:15 weight:NSFontWeightBold]
                                    color:NSColor.labelColor
                                alignment:NSTextAlignmentLeft]];
     [view addSubview:[self dashboardText:watchRight
-                                   frame:NSMakeRect(330, 254, 210, 42)
+                                   frame:NSMakeRect(330, 236, 210, 42)
                                     font:[NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
                                    color:NSColor.secondaryLabelColor
                                alignment:NSTextAlignmentRight]];
 
     [view addSubview:[self dashboardMetricWithTitle:@"Notify"
                                               value:self.notifyOnChanges ? @"On" : @"Off"
-                                              frame:NSMakeRect(20, 202, 118, 44)]];
+                                              frame:NSMakeRect(20, 194, 118, 44)]];
     [view addSubview:[self dashboardMetricWithTitle:@"Mirror"
                                               value:self.mirrorCamera ? @"On" : @"Off"
-                                              frame:NSMakeRect(154, 202, 118, 44)]];
+                                              frame:NSMakeRect(154, 194, 118, 44)]];
     [view addSubview:[self dashboardMetricWithTitle:@"Captures"
                                               value:[NSString stringWithFormat:@"%ld", (long)self.captureCount]
-                                              frame:NSMakeRect(288, 202, 118, 44)]];
+                                              frame:NSMakeRect(288, 194, 118, 44)]];
     [view addSubview:[self dashboardMetricWithTitle:@"Changes"
                                               value:[NSString stringWithFormat:@"%ld", (long)self.changeCount]
-                                              frame:NSMakeRect(422, 202, 118, 44)]];
+                                              frame:NSMakeRect(422, 194, 118, 44)]];
 
-    [view addSubview:[self dashboardRule:NSMakeRect(20, 184, 520, 1)]];
+    [view addSubview:[self dashboardRule:NSMakeRect(20, 176, 520, 1)]];
     [view addSubview:[self dashboardText:@"Recorder"
-                                   frame:NSMakeRect(20, 144, 240, 30)
+                                   frame:NSMakeRect(20, 136, 240, 30)
                                     font:[NSFont systemFontOfSize:22 weight:NSFontWeightBold]
                                    color:NSColor.labelColor
                                alignment:NSTextAlignmentLeft]];
     NSString *recordStatus = self.recordStatusItem.title ?: @"Recorder: idle";
     NSString *devices = self.deviceStatusItem.title ?: @"Devices: checking...";
     [view addSubview:[self dashboardText:recordStatus
-                                   frame:NSMakeRect(20, 114, 520, 24)
+                                   frame:NSMakeRect(20, 106, 520, 24)
                                     font:[NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
                                    color:NSColor.secondaryLabelColor
                                alignment:NSTextAlignmentLeft]];
     [view addSubview:[self dashboardText:devices
-                                   frame:NSMakeRect(20, 90, 520, 24)
+                                   frame:NSMakeRect(20, 82, 520, 24)
                                     font:[NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
                                    color:NSColor.secondaryLabelColor
                                alignment:NSTextAlignmentLeft]];
@@ -381,22 +382,26 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
     if ([self ffmpegPath]) { readiness += 0.25; }
     if ([self cameraPermissionSummary].length > 0) { readiness += 0.25; }
     if (CGPreflightScreenCaptureAccess()) { readiness += 0.25; }
-    [view addSubview:[self dashboardProgress:NSMakeRect(20, 68, 520, 10) value:MIN(1.0, readiness)]];
+    [view addSubview:[self dashboardProgress:NSMakeRect(20, 60, 520, 8) value:MIN(1.0, readiness)]];
     [view addSubview:[self dashboardButtonWithTitle:self.watchToggleItem.title ?: @"Start Visual Watch"
                                               frame:NSMakeRect(20, 22, 122, 32)
+                                             symbol:self.watchRunning ? @"pause.fill" : @"play.fill"
                                              action:@selector(toggleWatch:)]];
     NSButton *screenButton = [self dashboardButtonWithTitle:self.screenRecordItem.title ?: @"Screen"
                                                       frame:NSMakeRect(152, 22, 112, 32)
+                                                     symbol:@"record.circle"
                                                      action:@selector(toggleScreenRecording:)];
     screenButton.enabled = self.screenRecordItem.enabled;
     [view addSubview:screenButton];
     NSButton *faceButton = [self dashboardButtonWithTitle:self.faceRecordItem.title ?: @"Screen + Face"
                                                     frame:NSMakeRect(274, 22, 132, 32)
+                                                   symbol:@"person.crop.rectangle"
                                                    action:@selector(toggleFaceRecording:)];
     faceButton.enabled = self.faceRecordItem.enabled;
     [view addSubview:faceButton];
     [view addSubview:[self dashboardButtonWithTitle:@"Run Self-Test"
                                               frame:NSMakeRect(416, 22, 124, 32)
+                                             symbol:@"checkmark.seal"
                                              action:@selector(runSelfTest:)]];
 
     return view;
@@ -433,58 +438,61 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
     bar.shadow = shadow;
 
     CGFloat segmentWidth = frame.size.width / 3.0;
-    [bar addSubview:[self dashboardTopBarSegment:@"Overview"
+    [bar addSubview:[self dashboardTopBarButton:@"Overview"
                                            frame:NSMakeRect(4, 4, segmentWidth - 8, 34)
-                                        selected:NO]];
-    [bar addSubview:[self dashboardTopBarSegment:@"Revere"
+                                          symbol:@"rectangle.grid.2x2"
+                                        selected:NO
+                                          action:@selector(showControls:)]];
+    [bar addSubview:[self dashboardTopBarButton:@"Revere"
                                            frame:NSMakeRect(segmentWidth + 4, 4, segmentWidth - 8, 34)
-                                        selected:YES]];
-    [bar addSubview:[self dashboardTopBarSegment:@"Recorder"
+                                          symbol:@"bolt.circle.fill"
+                                        selected:YES
+                                          action:@selector(runSelfTest:)]];
+    [bar addSubview:[self dashboardTopBarButton:@"Recorder"
                                            frame:NSMakeRect((segmentWidth * 2.0) + 4, 4, segmentWidth - 8, 34)
-                                        selected:NO]];
+                                          symbol:@"record.circle"
+                                        selected:NO
+                                          action:@selector(openRecordings:)]];
 
     [bar addSubview:[self dashboardTopBarDivider:NSMakeRect(segmentWidth, 9, 1, 24)]];
     [bar addSubview:[self dashboardTopBarDivider:NSMakeRect(segmentWidth * 2.0, 9, 1, 24)]];
     return bar;
 }
 
-- (NSView *)dashboardTopBarSegment:(NSString *)title frame:(NSRect)frame selected:(BOOL)selected {
-    NSView *segment = [[NSView alloc] initWithFrame:frame];
-    segment.wantsLayer = YES;
-    segment.layer.cornerRadius = 10.0;
-    segment.layer.masksToBounds = YES;
-    segment.layer.backgroundColor = selected
+- (NSButton *)dashboardTopBarButton:(NSString *)title
+                              frame:(NSRect)frame
+                             symbol:(NSString *)symbolName
+                           selected:(BOOL)selected
+                             action:(SEL)action {
+    NSButton *button = [NSButton buttonWithTitle:title target:self action:action];
+    button.frame = frame;
+    button.bezelStyle = NSBezelStyleRegularSquare;
+    button.bordered = NO;
+    button.font = [NSFont systemFontOfSize:16 weight:selected ? NSFontWeightBold : NSFontWeightSemibold];
+    button.contentTintColor = selected ? NSColor.whiteColor : NSColor.secondaryLabelColor;
+    button.image = [self dashboardSymbol:symbolName accessibility:title];
+    button.imagePosition = NSImageLeading;
+    button.imageHugsTitle = YES;
+    button.toolTip = title;
+    button.wantsLayer = YES;
+    button.layer.cornerRadius = 10.0;
+    button.layer.masksToBounds = YES;
+    button.layer.backgroundColor = selected
         ? [NSColor colorWithCalibratedRed:0.03 green:0.45 blue:0.86 alpha:1.0].CGColor
         : [NSColor clearColor].CGColor;
 
     if (selected) {
         CAGradientLayer *shine = [CAGradientLayer layer];
-        shine.frame = segment.bounds;
+        shine.frame = button.bounds;
         shine.colors = @[
             (__bridge id)[NSColor colorWithCalibratedRed:0.10 green:0.62 blue:1.0 alpha:1.0].CGColor,
             (__bridge id)[NSColor colorWithCalibratedRed:0.02 green:0.39 blue:0.78 alpha:1.0].CGColor
         ];
         shine.startPoint = CGPointMake(0.0, 1.0);
         shine.endPoint = CGPointMake(1.0, 0.0);
-        [segment.layer addSublayer:shine];
-
-        NSView *dot = [[NSView alloc] initWithFrame:NSMakeRect(18, 14, 6, 6)];
-        dot.wantsLayer = YES;
-        dot.layer.cornerRadius = 3.0;
-        dot.layer.backgroundColor = NSColor.whiteColor.CGColor;
-        [segment addSubview:dot];
+        [button.layer insertSublayer:shine atIndex:0];
     }
-
-    CGFloat titleInset = selected ? 32.0 : 0.0;
-    NSTextField *label = [self dashboardText:title
-                                      frame:NSMakeRect(titleInset, 6, frame.size.width - titleInset, 22)
-                                       font:[NSFont systemFontOfSize:16 weight:selected ? NSFontWeightBold : NSFontWeightSemibold]
-                                      color:selected ? NSColor.whiteColor : NSColor.secondaryLabelColor
-                                  alignment:NSTextAlignmentCenter];
-    label.maximumNumberOfLines = 1;
-    label.lineBreakMode = NSLineBreakByTruncatingTail;
-    [segment addSubview:label];
-    return segment;
+    return button;
 }
 
 - (NSView *)dashboardTopBarDivider:(NSRect)frame {
@@ -516,6 +524,38 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
     return progress;
 }
 
+- (NSView *)dashboardSparkline:(NSRect)frame progress:(double)progress {
+    NSView *graph = [[NSView alloc] initWithFrame:frame];
+    graph.wantsLayer = YES;
+    graph.layer.cornerRadius = 7.0;
+    graph.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.105 alpha:1.0].CGColor;
+
+    NSInteger barCount = 28;
+    CGFloat gap = 4.0;
+    CGFloat barWidth = (frame.size.width - (gap * (barCount - 1))) / barCount;
+    double liveScale = self.watchRunning ? 1.0 : 0.38;
+    NSInteger activeBars = MAX(1, (NSInteger)ceil(progress * barCount));
+    for (NSInteger index = 0; index < barCount; index++) {
+        double wave = (sin((double)index * 0.72) + 1.0) / 2.0;
+        double pulse = (index % 5 == 0) ? 0.35 : 0.0;
+        double heightRatio = 0.18 + ((wave + pulse) * 0.52 * liveScale);
+        if (index < self.changeCount % barCount) { heightRatio = MIN(0.95, heightRatio + 0.25); }
+
+        CGFloat barHeight = MAX(3.0, (frame.size.height - 6.0) * heightRatio);
+        NSView *bar = [[NSView alloc] initWithFrame:NSMakeRect(index * (barWidth + gap),
+                                                               3,
+                                                               barWidth,
+                                                               barHeight)];
+        bar.wantsLayer = YES;
+        bar.layer.cornerRadius = 1.5;
+        bar.layer.backgroundColor = (self.watchRunning || index < activeBars)
+            ? [NSColor colorWithCalibratedRed:0.14 green:0.63 blue:1.0 alpha:0.92].CGColor
+            : [NSColor colorWithCalibratedWhite:0.28 alpha:0.55].CGColor;
+        [graph addSubview:bar];
+    }
+    return graph;
+}
+
 - (NSView *)dashboardMetricWithTitle:(NSString *)title value:(NSString *)value frame:(NSRect)frame {
     NSView *metric = [[NSView alloc] initWithFrame:frame];
     [metric addSubview:[self dashboardText:title
@@ -531,13 +571,25 @@ static NSString *RevereRunTask(NSString *launchPath, NSArray<NSString *> *argume
     return metric;
 }
 
-- (NSButton *)dashboardButtonWithTitle:(NSString *)title frame:(NSRect)frame action:(SEL)action {
+- (NSButton *)dashboardButtonWithTitle:(NSString *)title frame:(NSRect)frame symbol:(NSString *)symbolName action:(SEL)action {
     NSButton *button = [NSButton buttonWithTitle:title target:self action:action];
     button.frame = frame;
     button.font = [NSFont systemFontOfSize:12 weight:NSFontWeightBold];
     button.bezelStyle = NSBezelStyleRounded;
+    button.image = [self dashboardSymbol:symbolName accessibility:title];
+    button.imagePosition = NSImageLeading;
+    button.imageHugsTitle = YES;
     button.lineBreakMode = NSLineBreakByTruncatingTail;
     return button;
+}
+
+- (NSImage *)dashboardSymbol:(NSString *)symbolName accessibility:(NSString *)description {
+    if (!symbolName.length || ![NSImage respondsToSelector:@selector(imageWithSystemSymbolName:accessibilityDescription:)]) {
+        return nil;
+    }
+    NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:description];
+    image.template = YES;
+    return image;
 }
 
 - (void)updateMenuState {
